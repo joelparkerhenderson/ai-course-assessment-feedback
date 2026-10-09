@@ -1,0 +1,129 @@
+# Generic UK undergraduate essay rubric (analytic, criterion-referenced).
+# Copy this file and edit it to match your module's marking scheme.
+# Criterion weights must sum to 1.0. Bands must cover 0-100 with no gaps.
+
+name = "UK undergraduate essay (generic)"
+version = "1.0.0"
+level = "Undergraduate"
+# Optional word limits. Going outside them flags the essay for human review; the mark is not changed.
+min_words = 0
+max_words = 0  # 0 means no limit
+
+[[bands]]
+id = "first_exceptional"
+label = "Exceptional first"
+min = 80
+max = 100
+descriptor = "Outstanding work of near-publishable quality for the level: original, authoritative, insightful, flawlessly executed."
+
+[[bands]]
+id = "first"
+label = "First"
+min = 70
+max = 79
+descriptor = "Excellent work: sophisticated critical analysis, independent argument, comprehensive and well-evaluated evidence, very well written."
+
+[[bands]]
+id = "upper_second"
+label = "Upper second (2:1)"
+min = 60
+max = 69
+descriptor = "Very good work: clear, well-developed argument with some critical evaluation, good range of relevant evidence, well organised and written."
+
+[[bands]]
+id = "lower_second"
+label = "Lower second (2:2)"
+min = 50
+max = 59
+descriptor = "Good, competent work: sound knowledge and a relevant answer, but mostly descriptive, with limited critical analysis or a narrow evidence base."
+
+[[bands]]
+id = "third"
+label = "Third"
+min = 40
+max = 49
+descriptor = "Adequate work that just meets the learning outcomes: basic understanding, weak argument, limited or poorly used evidence, notable weaknesses in expression."
+
+[[bands]]
+id = "marginal_fail"
+label = "Marginal fail"
+min = 30
+max = 39
+descriptor = "Does not quite meet the learning outcomes: some relevant material, but significant misunderstanding, little argument, poor use of sources."
+
+[[bands]]
+id = "fail"
+label = "Fail"
+min = 0
+max = 29
+descriptor = "Clearly fails the learning outcomes: largely irrelevant, very little understanding, incoherent, or substantially incomplete."
+
+[[criteria]]
+id = "knowledge"
+name = "Knowledge, understanding and relevance to the question"
+weight = 0.20
+description = "Accuracy and depth of subject knowledge; how directly and fully the essay addresses the question set."
+[criteria.descriptors]
+first_exceptional = "Masterful, nuanced understanding; addresses every dimension of the question with insight beyond the taught material."
+first = "Thorough, accurate and nuanced understanding; fully and directly answers the question."
+upper_second = "Accurate and well-informed; answers the question with only minor gaps."
+lower_second = "Generally accurate but uneven or superficial; partly drifts from the question."
+third = "Basic understanding with some errors; only partly addresses the question."
+marginal_fail = "Significant errors or misunderstandings; largely misreads the question."
+fail = "Little or no relevant knowledge; does not address the question."
+
+[[criteria]]
+id = "argument"
+name = "Argument and critical analysis"
+weight = 0.30
+description = "Presence of a clear thesis; quality of reasoning; critical evaluation rather than description; engagement with counter-arguments."
+[criteria.descriptors]
+first_exceptional = "Original, compelling argument; incisive evaluation of competing positions; shows independent intellectual judgement."
+first = "Sustained, coherent and independent argument; consistently critical; counter-arguments weighed convincingly."
+upper_second = "Clear argument, well developed; real critical evaluation, though not always sustained."
+lower_second = "An argument is present but underdeveloped; mostly descriptive with occasional analysis."
+third = "Weak or implicit argument; largely descriptive; assertions not supported by reasoning."
+marginal_fail = "Little discernible argument; reasoning confused or contradictory."
+fail = "No argument; incoherent or entirely descriptive and irrelevant."
+
+[[criteria]]
+id = "evidence"
+name = "Use of evidence and sources"
+weight = 0.20
+description = "Range, relevance and quality of sources; how well evidence is integrated, interpreted and evaluated in support of the argument."
+[criteria.descriptors]
+first_exceptional = "Wide, well-chosen scholarship beyond the reading list, evaluated critically and integrated seamlessly."
+first = "Extensive, relevant evidence, critically evaluated and well integrated into the argument."
+upper_second = "Good range of relevant sources used to support points, with some evaluation."
+lower_second = "Adequate but narrow sources; evidence described more than evaluated."
+third = "Limited sources, sometimes inappropriate; weak link between evidence and claims."
+marginal_fail = "Very few or unreliable sources; claims largely unsupported."
+fail = "No meaningful use of evidence."
+
+[[criteria]]
+id = "structure"
+name = "Structure and organisation"
+weight = 0.15
+description = "Introduction that frames the answer; logical progression of paragraphs; signposting; a conclusion that follows from the argument."
+[criteria.descriptors]
+first_exceptional = "Elegant structure that actively strengthens the argument; every section purposeful."
+first = "Very well organised; clear, logical progression and effective signposting."
+upper_second = "Well organised with clear introduction and conclusion; minor lapses in flow."
+lower_second = "Recognisable structure, but some paragraphs are poorly linked or misplaced."
+third = "Weak structure; repetition or a confusing order hinders understanding."
+marginal_fail = "Poorly organised; little sense of introduction, development or conclusion."
+fail = "No discernible structure."
+
+[[criteria]]
+id = "writing"
+name = "Academic writing, style and referencing"
+weight = 0.15
+description = "Clarity, precision, academic register, grammar and spelling; consistent and accurate citation and referencing."
+[criteria.descriptors]
+first_exceptional = "Fluent, precise and engaging academic prose; immaculate referencing."
+first = "Clear, precise, fluent writing; accurate, consistent referencing."
+upper_second = "Clear writing with few errors; referencing mostly accurate and consistent."
+lower_second = "Generally clear but with noticeable errors or informal register; referencing inconsistent."
+third = "Frequent errors that sometimes obscure meaning; referencing weak or incomplete."
+marginal_fail = "Errors often obscure meaning; little referencing."
+fail = "Writing largely incomprehensible; no referencing."

@@ -1,0 +1,12 @@
+results/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+*.json.tmp
+
+# Third-party copyrighted example essay: kept locally for testing, never committed.
+# Re-create it with skills/prepare-essays (see assets/example-papers/README.md).
+assets/example-papers/critical-evaluation-of-research-papers-psychology-essay.md

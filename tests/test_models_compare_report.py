@@ -14,7 +14,7 @@ from unittest import mock
 from marker import cli
 from marker.compare import compare_runs, discover_result_dirs, format_report, label_runs, load_results
 from marker.grader import Settings, grade_essay
-from marker.models import family_key, model_info, select_models, slug, think_for
+from marker.models import family_key, model_info, parse_think, select_models, slug, think_for, think_setting
 from marker.report import parse_show, render
 from marker.scale import FRACTION_SCALE, Scale, dumps
 
@@ -75,6 +75,30 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertIs(think_for("muse-glimmer:30b-mlx", "high", ["completion", "thinking"]), True)
         self.assertIsNone(think_for("mistral-small:latest", "high", ["completion"]))
         self.assertIsNone(think_for("unknown:1b", "high", None))
+
+    def test_think_on_off(self):
+        # gpt-oss can't switch reasoning off: off is the lowest effort, on is the middle one.
+        self.assertEqual(think_for("gpt-oss:20b", "off", None), "low")
+        self.assertEqual(think_for("gpt-oss:20b", "on", None), "medium")
+        caps = ["completion", "thinking"]
+        self.assertIs(think_for("qwen3:8b", "off", caps), False)
+        self.assertIs(think_for("qwen3:8b", "on", caps), True)
+        self.assertIsNone(think_for("mistral-small:latest", "off", ["completion"]))
+        with self.assertRaises(ValueError):
+            think_for("gpt-oss:20b", "max", None)
+
+    def test_parse_think_and_overrides(self):
+        self.assertEqual(parse_think(None), ("high", {}))
+        default, overrides = parse_think(["medium,gpt-oss:120b=low", "Muse Glimmer=off"])
+        self.assertEqual(default, "medium")
+        self.assertEqual(think_setting("gpt-oss:120b", default, overrides), "low")
+        self.assertEqual(think_setting("gpt-oss:20b", default, overrides), "medium")
+        self.assertEqual(think_setting("muse-glimmer:30b-mlx", default, overrides), "off")  # family match
+        # A family override doesn't leak into fine-tunes with their own family name.
+        self.assertEqual(think_setting("gpt-oss-safeguard:120b", "high", {"gpt-oss": "low"}), "high")
+        for bad in (["extreme"], ["=low"], ["gpt-oss:20b=max"]):
+            with self.assertRaises(ValueError):
+                parse_think(bad)
 
     def test_slug(self):
         self.assertEqual(slug("library/gpt-oss:20b"), "library_gpt-oss_20b")
@@ -162,6 +186,9 @@ class CompareAndReportTests(unittest.TestCase):
         expl = render(r, {"explanation"})
         self.assertIn("[argument]", expl)
         self.assertIn("Justification for argument.", expl)
+        self.assertIn("weight 30%", expl)
+        self.assertRegex(expl, r"mark \d+%  band ")  # marks as whole percents, never 0.7100
+        self.assertNotIn("0.7100", expl)
         self.assertIn("not stored", render(r, {"thinking"}))
         with_thinking = make_result(self.e1, "model-a", dict(knowledge=60, argument=60, evidence=60, structure=60, writing=60), reasoning="Step 1: read the essay.")
         self.assertIn("Step 1: read the essay.", render(with_thinking, {"thinking"}))
@@ -174,6 +201,7 @@ class FakeOllama(FakeClient):
         super().__init__([])
         self.marks_by_model = marks_by_model
         self.calls: list[tuple[str, object]] = []
+        self.options: list[dict[str, object]] = []
 
     def version(self): return "test"
     def list_models(self): return TAGS
@@ -182,10 +210,54 @@ class FakeOllama(FakeClient):
 
     def chat(self, model, messages, *, schema, options, think):
         self.calls.append((model, think))
+        self.options.append(options)
         return {"message": {"content": answer(self.marks_by_model[model]), "thinking": f"thoughts of {model}"}}
 
 
 class CliMultiModelTests(unittest.TestCase):
+    def test_grade_model_options(self):
+        fake = FakeOllama({m: dict(knowledge=60, argument=60, evidence=60, structure=60, writing=60)
+                           for m in ("gpt-oss:20b", "gpt-oss:120b", "muse-glimmer:30b-mlx")})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(cli, "make_client", return_value=fake):
+            essay = write_essay(Path(d), "paper.txt")
+            out = Path(d) / "out"
+            argv = ["grade", str(essay), "--model", "gpt-oss:20b,gpt-oss:120b,muse-glimmer:30b-mlx",
+                    "--samples", "1", "--out", str(out), "--reasoning", "medium,gpt-oss:120b=low", "--think", "muse-glimmer=off",
+                    "--temperature", "0.3", "--top-p", "0.9", "--top-k", "40", "--min-p", "0.05",
+                    "--repeat-penalty", "1.1", "--num-predict", "8192", "--num-ctx", "16384",
+                    "--max-retries", "1", "--option", "num_gpu=99", "--option", "low_vram=true"]
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                self.assertEqual(cli.main(argv), 0, stderr.getvalue())
+            self.assertEqual(fake.calls, [("gpt-oss:20b", "medium"), ("gpt-oss:120b", "low"), ("muse-glimmer:30b-mlx", False)])
+            self.assertEqual(fake.options[0], {"temperature": 0.3, "top_p": 0.9, "seed": 42, "num_ctx": 16384, "top_k": 40,
+                                               "min_p": 0.05, "repeat_penalty": 1.1, "num_predict": 8192,
+                                               "num_gpu": 99, "low_vram": True})
+            settings = json.loads((out / "gpt-oss_120b" / "paper.json").read_text())["provenance"]["settings"]
+            self.assertEqual((settings["think"], settings["top_k"], settings["max_retries"], settings["extra_options"]),
+                             ("low", 40, 1, {"num_gpu": 99, "low_vram": True}))
+
+            # Changing a model option changes the fingerprint, so the essay is re-marked.
+            fake.calls.clear()
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main([a if a != "40" else "50" for a in argv]), 0)
+            self.assertEqual(len(fake.calls), 3)
+
+    def test_grade_rejects_bad_model_options(self):
+        fake = FakeOllama({})
+        bad = [["--option", "seed=1"], ["--option", "temperature=0"], ["--option", "nokey"], ["--think", "max"]]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(cli, "make_client", return_value=fake):
+            essay = write_essay(Path(d), "paper.txt")
+            for extra in bad:
+                stderr = io.StringIO()
+                with self.subTest(extra=extra), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    self.assertEqual(cli.main(["grade", str(essay), "--out", str(Path(d) / "out"), *extra]), 2)
+                    self.assertIn("error:", stderr.getvalue())
+        self.assertEqual(fake.calls, [])
+        for extra in (["--top-p", "0"], ["--temperature", "nan"], ["--samples", "0"], ["--max-retries", "-1"]):
+            with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli.main(["grade", "x.txt", *extra])
+
     def test_grade_two_models_compare_and_show(self):
         fake = FakeOllama({
             "gpt-oss:20b": dict(knowledge=65, argument=65, evidence=65, structure=65, writing=65),

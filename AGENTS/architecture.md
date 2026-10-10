@@ -29,7 +29,7 @@ brief.txt   ─┐
 
 | Module | Responsibility | Must not |
 |--------|----------------|----------|
-| `scale.py` | Exact Decimal marks (0.0000-1.0000, 4 places), reporting scales, rounding, median, JSON encoding | use floats |
+| `scale.py` | Numeric modes (float default, Decimal 4 places), reporting scales, rounding, median, display percents, JSON encoding | mix float and Decimal |
 | `rubric.py` | Parse and validate TOML rubrics (Decimal bands and weights); map marks to bands | know about the model |
 | `essay.py` | Read .txt/.md/.docx; normalise; hash; count words | alter wording |
 | `prompt.py` | System and user messages; JSON schema; canonical hashing | contain timestamps or randomness |

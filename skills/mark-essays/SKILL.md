@@ -39,7 +39,10 @@ reasoning behind the method.
    Add `--show explanation,score` if the user wants the reasons, or
    `--show thinking` for the model's reasoning trace (`--show all` for everything).
    Keep the defaults (`--samples 3 --seed 42 --temperature 0.6 --think high`)
-   unless there is a reason to change them. Any change alters the fingerprint
+   unless there is a reason to change them. Reasoning can be set per model
+   (`--think high,gpt-oss:120b=low`, or `off` for non-gpt-oss thinking models),
+   and sampling tuned with `--top-p`, `--top-k`, `--min-p`, `--repeat-penalty`,
+   `--num-predict` or `--option KEY=VALUE`. Any change alters the fingerprint
    and makes runs non-comparable.
 6. **Report.** Read `results/<batch>/summary.csv` and give the user:
    - a table of id, mark, band and needs_review;

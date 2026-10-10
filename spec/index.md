@@ -43,6 +43,8 @@ specification records the requirements that came out of it. Requirement ids
 | MODEL-4 | Users can choose Mac-optimised MLX builds (`--mlx auto/prefer/only/never/any`). `auto` prefers MLX on Apple Silicon and excludes it elsewhere. Exact tags are never filtered. |
 | MODEL-5 | `marker models` lists installed models with family, size, quantisation and build, and marks the selection. `marker check` reports each selected model as usable or not. |
 | MODEL-6 | The reasoning setting is per model: an effort level for gpt-oss, on for other thinking-capable models, and unset otherwise. The effective value is recorded in provenance. |
+| MODEL-7 | `--think` (alias `--reasoning`) accepts `low`, `medium`, `high`, `on` or `off`, plus `MODEL=SETTING` overrides by exact tag or family. `on` is `medium` for gpt-oss; `off` disables reasoning on other thinking models and is `low` for gpt-oss, which can't disable it (a note is printed). |
+| MODEL-8 | `grade` exposes the sampling and generation options `--temperature`, `--top-p`, `--top-k`, `--min-p`, `--repeat-penalty`, `--num-predict`, `--num-ctx` and `--max-retries`, validated on input, plus `--option KEY=VALUE` for any other Ollama option (not ones with their own flag, or `seed`). All are recorded in provenance and the fingerprint; unset optional ones are left out of the fingerprint so older results stay valid. |
 
 ## Scores and precision
 
@@ -108,6 +110,7 @@ specification records the requirements that came out of it. Requirement ids
 | SHOW-1 | `--show` on `grade` and `show` selects any combination of `score` (id, score on the reporting scale, band), `explanation` (per-criterion justification, evidence, feedback, flags) and `thinking` (the model's reasoning trace); `all` selects every view. The default is `score`. |
 | SHOW-2 | Requesting `thinking` during `grade` stores the reasoning trace. A cached result without one is re-marked. |
 | SHOW-3 | `marker show` prints the views from saved results without calling a model. |
+| SHOW-4 | In terminal display, 0-1 fractions (marks, weights, spreads, agreement rates, values in flag text) are whole percents rounded half to even (banker's rounding) on the exact decimal value: `0.135` shows as `14%`. Stored data and reported scores are unaffected. |
 
 ## Validation
 

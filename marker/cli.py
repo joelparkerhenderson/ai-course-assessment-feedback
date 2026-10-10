@@ -34,6 +34,14 @@ Choosing the score scale (``grade``, ``show``, ``evaluate``). The final score is
     --score-min 0.0000 --score-max 1.0000      # probability with 4 places, e.g. 0.6213
     --score-min 0 --score-max 20 --score-places 1   # e.g. 12.4
 
+Model options (``grade``); each is recorded in provenance and the fingerprint::
+
+    --think high                     # reasoning: low|medium|high (gpt-oss effort), on, off
+    --think medium,gpt-oss:120b=low  # a default plus per-model (or per-family) overrides
+    --temperature 0.6 --top-p 1 --top-k 40 --min-p 0.05 --repeat-penalty 1.1
+    --num-predict 8192 --num-ctx 32768 --max-retries 2 --samples 3 --seed 42
+    --option num_gpu=99              # any other Ollama option, passed through
+
 Choosing what to print (``grade`` and ``show``)::
 
     --show score                     # id<TAB>score<TAB>band (default)
@@ -78,8 +86,22 @@ from .compare import (
 )
 from .essay import Essay, expand_paths, load_essay
 from .evaluate import evaluate, read_marks
-from .grader import ANALYSIS_VERSION, Settings, compute_fingerprint, grade_essay, is_compatible, reanalyse
-from .models import MLX_POLICIES, ModelInfo, is_apple_silicon, model_info, resolve_mlx_policy, select_models, slug, think_for
+from .grader import ANALYSIS_VERSION, MANAGED_OPTIONS, Settings, compute_fingerprint, grade_essay, is_compatible, reanalyse
+from .models import (
+    DEFAULT_THINK,
+    MLX_POLICIES,
+    ModelInfo,
+    is_apple_silicon,
+    is_gpt_oss,
+    matches_target,
+    model_info,
+    parse_think,
+    resolve_mlx_policy,
+    select_models,
+    slug,
+    think_for,
+    think_setting,
+)
 from .ollama import DEFAULT_HOST, OllamaClient, OllamaError
 from .report import SHOW_CHOICES, has_reasoning, parse_show, render
 from .rubric import Rubric, RubricError, load_rubric
@@ -91,6 +113,7 @@ from .scale import (
     Scale,
     dec,
     dumps,
+    fmt_percent,
     get_numeric,
     normalise_mark,
     set_numeric,
@@ -135,6 +158,60 @@ def resolve_models(args: argparse.Namespace, client: OllamaClient) -> list[str]:
         sizes=split_csv(args.size),
         mlx=args.mlx,
     )
+
+
+def positive_int(text_value: str) -> int:
+    """argparse type: an integer of at least 1."""
+    n = int(text_value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, not {n}")
+    return n
+
+
+def non_negative_int(text_value: str) -> int:
+    """argparse type: an integer of at least 0."""
+    n = int(text_value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be at least 0, not {n}")
+    return n
+
+
+def bounded_float(low: float, high: float, *, low_open: bool = False) -> Any:
+    """argparse type factory: a finite float in ``[low, high]`` (or ``(low, high]`` with ``low_open``)."""
+
+    def parse(text_value: str) -> float:
+        x = float(text_value)
+        if not (low < x <= high if low_open else low <= x <= high):
+            interval = f"({low}, {high}]" if low_open else f"[{low}, {high}]"
+            raise argparse.ArgumentTypeError(f"must be in {interval}, not {text_value}")
+        return x
+
+    parse.__name__ = "number"  # argparse names the type in error messages
+    return parse
+
+
+def parse_options(values: list[str] | None) -> dict[str, Any]:
+    """Parse ``--option KEY=VALUE`` values into extra Ollama options.
+
+    VALUE is read as JSON when it can be (``99``, ``0.5``, ``true``), else kept as text.
+
+    Raises:
+        ValueError: A value has no ``=``, an empty key, or sets an option marker manages itself.
+    """
+    options: dict[str, Any] = {}
+    for item in values or []:
+        key, sep, raw = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ValueError(f"--option {item!r}: expected KEY=VALUE")
+        if key in MANAGED_OPTIONS:
+            flag = "--seed" if key == "seed" else "--" + key.replace("_", "-")
+            raise ValueError(f"--option {key}: use {flag} instead")
+        try:
+            options[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            options[key] = raw.strip()
+    return options
 
 
 # --- check / models / rubric --------------------------------------------------------
@@ -185,9 +262,9 @@ def cmd_rubric(args: argparse.Namespace) -> int:
     rubric = load_rubric(args.rubric)
     print(f"{rubric.name} v{rubric.version}  sha256={rubric.sha256[:16]}")
     for b in rubric.bands:
-        print(f"  {b.min:>3}-{b.max:<3} {b.label}")
+        print(f"  {fmt_percent(b.min) + '+':>5}  {b.label}")
     for c in rubric.criteria:
-        print(f"  {c.weight:>5.0%}  {c.id}: {c.name}")
+        print(f"  {fmt_percent(c.weight):>5}  {c.id}: {c.name}")
     return 0
 
 
@@ -360,6 +437,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         0 if every essay was marked or reused, 1 if any failed, 2 if no essays were found.
     """
     show = parse_show(args.show)
+    think_default, think_overrides = parse_think(args.think)
     scale = make_scale(args)
     rubric = load_rubric(args.rubric)
     brief = Path(args.brief).read_text(encoding="utf-8") if args.brief else None
@@ -387,15 +465,31 @@ def cmd_grade(args: argparse.Namespace) -> int:
         samples=args.samples,
         seed=args.seed,
         temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        min_p=args.min_p,
+        repeat_penalty=args.repeat_penalty,
+        num_predict=args.num_predict,
         num_ctx=args.num_ctx,
+        max_retries=args.max_retries,
+        extra_options=parse_options(args.option),
         disagreement_threshold=args.disagreement,
         boundary_margin=args.boundary_margin,
         keep_reasoning=args.keep_reasoning or "thinking" in show,
     )
 
     dirs: list[Path] = []
+    unused = [t for t in think_overrides if not any(matches_target(m, t) for m in models)]
+    if unused:
+        eprint(f"warning: --think set for {', '.join(unused)}, which is not among the selected models")
     for model in models:
-        settings = dataclasses.replace(base, model=model, think=think_for(model, args.think, client.capabilities(model)))
+        setting = think_setting(model, think_default, think_overrides)
+        think = think_for(model, setting, client.capabilities(model))
+        settings = dataclasses.replace(base, model=model, think=think)
+        if setting == "off" and is_gpt_oss(model):
+            eprint(f"note: {model} can't switch reasoning off; using the lowest effort (low)")
+        elif think is None and setting != "off":
+            eprint(f"note: {model} doesn't report the thinking capability, so --think has no effect on it")
         if info[model].mlx:
             # Observed with Ollama 0.35.1: MLX builds ignore the seed, so reruns can give different marks.
             eprint(f"warning: {model} is an MLX build; Ollama's MLX engine is not seed-deterministic, "
@@ -488,8 +582,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     print(f"Pearson r:               {'n/a (no variance)' if r is None else f'{r:.3f}'}")
     print(f"QWK (marks):             {report['qwk_marks']:.3f}")
     print(f"QWK (bands):             {report['qwk_bands']:.3f}")
-    print(f"exact band agreement:    {report['exact_band_agreement']:.0%}")
-    print(f"adjacent band agreement: {report['adjacent_band_agreement']:.0%}")
+    print(f"exact band agreement:    {fmt_percent(report['exact_band_agreement'])}")
+    print(f"adjacent band agreement: {fmt_percent(report['adjacent_band_agreement'])}")
     for key in ("unmatched_machine", "unmatched_human"):
         if report[key]:
             print(f"{key}: {', '.join(report[key])}")
@@ -547,6 +641,33 @@ def build_parser() -> argparse.ArgumentParser:
                         help="numeric type for marks 0.0-1.0: float (default) or decimal "
                              "(exact Decimal, 4 places, 0.0000-1.0000)")
 
+    def add_model_options(sp: argparse.ArgumentParser) -> None:
+        """Add reasoning, sampling and generation options (``grade``)."""
+        g = sp.add_argument_group("model options (all are recorded in provenance and the fingerprint)")
+        g.add_argument("--think", "--reasoning", dest="think", action="append", metavar="SETTING",
+                       help="reasoning: low, medium or high (effort for gpt-oss; other thinking models just reason), "
+                            "on, or off (no reasoning; gpt-oss can't switch off, so it gets low). "
+                            "MODEL=SETTING sets one model or family, e.g. gpt-oss:120b=low "
+                            f"(repeat or comma-separate; default {DEFAULT_THINK})")
+        g.add_argument("--samples", type=positive_int, default=3, metavar="N",
+                       help="independent samples per essay; the median is used (default %(default)s)")
+        g.add_argument("--seed", type=int, default=42, metavar="N", help="base seed; sample i uses seed+i (default %(default)s)")
+        g.add_argument("--temperature", type=bounded_float(0, 2), default=0.6, metavar="T",
+                       help="sampling temperature, 0-2 (default %(default)s)")
+        g.add_argument("--top-p", type=bounded_float(0, 1, low_open=True), default=1.0, metavar="P",
+                       help="nucleus sampling cut-off, above 0 up to 1 (default %(default)s)")
+        g.add_argument("--top-k", type=positive_int, metavar="N", help="sample only from the N most likely tokens (default: Ollama's)")
+        g.add_argument("--min-p", type=bounded_float(0, 1), metavar="P", help="drop tokens below P x the top token's probability (default: Ollama's)")
+        g.add_argument("--repeat-penalty", type=bounded_float(0, 2), metavar="X", help="penalty for repeated tokens; 1 = none (default: Ollama's)")
+        g.add_argument("--num-predict", type=positive_int, metavar="N",
+                       help="most tokens per answer, reasoning included (default: no limit)")
+        g.add_argument("--num-ctx", type=positive_int, default=32768, metavar="N", help="context window tokens (default %(default)s)")
+        g.add_argument("--max-retries", type=non_negative_int, default=2, metavar="N",
+                       help="extra attempts after an invalid answer (default %(default)s)")
+        g.add_argument("--option", action="append", metavar="KEY=VALUE",
+                       help="any other Ollama option, e.g. num_gpu=99 or num_thread=8 (VALUE is JSON: number, "
+                            "true/false, or text); repeatable")
+
     def add_show(sp: argparse.ArgumentParser) -> None:
         """Add the ``--show`` option."""
         sp.add_argument("--show", action="append", metavar="VIEWS",
@@ -577,12 +698,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_scale(sp)
     sp.add_argument("--brief", help="assignment brief / question text file")
     sp.add_argument("--out", default="results", help="output directory; one subdirectory per model when several (default %(default)s)")
-    sp.add_argument("--samples", type=int, default=3, help="independent samples per essay; median is used (default %(default)s)")
-    sp.add_argument("--seed", type=int, default=42, help="base seed; sample i uses seed+i (default %(default)s)")
-    sp.add_argument("--temperature", type=float, default=0.6, help="sampling temperature (default %(default)s)")
-    sp.add_argument("--think", default="high", choices=["low", "medium", "high"],
-                    help="reasoning effort for gpt-oss; other thinking models just have reasoning switched on (default %(default)s)")
-    sp.add_argument("--num-ctx", type=int, default=32768, help="context window tokens (default %(default)s)")
+    add_model_options(sp)
     sp.add_argument("--disagreement", type=dec, default=Decimal("0.1000"), metavar="DEC",
                     help="flag if marks spread more than this fraction, across samples or across models "
                          "(default %(default)s = 10 points)")
@@ -640,9 +756,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # Set the numeric mode before anything (rubric, results, CSVs) is read, so every value is one type.
     set_numeric(getattr(args, "numeric", DEFAULT_NUMERIC))
-    if getattr(args, "samples", 1) < 1:
-        eprint("--samples must be at least 1")
-        return 2
     try:
         return int(args.func(args))
     except (OllamaError, RubricError, ValueError, OSError) as e:

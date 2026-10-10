@@ -20,7 +20,7 @@ from __future__ import annotations
 import textwrap
 from typing import Any
 
-from .scale import MARK_QUANTUM, Scale, dec, fmt_mark, text
+from .scale import Scale, dec, fmt_percent
 
 #: The views that can be requested, in display order.
 SHOW_CHOICES = ("score", "explanation", "thinking")
@@ -71,22 +71,21 @@ def _wrap(text: str, indent: str, width: int = 100) -> list[str]:
 def explanation_text(result: dict[str, Any], scale: Scale | None = None) -> str:
     """Return the per-criterion explanation, feedback, integrity concerns and review flags.
 
-    Criterion marks are shown as internal 0.0-1.0 fractions to 4 places. The
-    overall score is shown on the reporting scale.
+    Marks, weights and spreads are shown as whole percents with banker's
+    rounding (:func:`marker.scale.fmt_percent`); the overall score is shown on
+    the reporting scale.
     """
     shown = scale or Scale.from_dict(result["score"])
     lines = [
         f"== {result['essay']['id']}  ({result['provenance']['model']})",
         f"Score: {score_of(result, scale)} on {shown.label()}  {result['band']['label']}  "
-        f"(mark {_mark(result['mark'])}, weighted {_mark(result['weighted_mark'], exact=True)})",
+        f"(mark {fmt_percent(result['mark'])})",
         "",
     ]
     for cid, c in result["criteria"].items():
-        samples = ", ".join(_mark(m) for m in c["sample_marks"])
-        lines.append(f"[{cid}] {c['name']}  weight {dec(c['weight']):.0%}")
-        lines.append(
-            f"  mark {_mark(c['mark'], exact=True)}  band {c['band']}  (samples: {samples}; spread {_mark(c['spread'])})"
-        )
+        samples = ", ".join(fmt_percent(m) for m in c["sample_marks"])
+        lines.append(f"[{cid}] {c['name']}  weight {fmt_percent(c['weight'])}")
+        lines.append(f"  mark {fmt_percent(c['mark'])}  band {c['band']}  (samples: {samples}; spread {fmt_percent(c['spread'])})")
         lines.extend(_wrap(c["justification"], "  "))
         unverified = set(c.get("unverified_evidence", []))
         for q in c["evidence"]:
@@ -149,14 +148,3 @@ def render(result: dict[str, Any], show: set[str], *, with_model: bool = False, 
         blocks.append(score_line(result, with_model=with_model, scale=scale))
     return "\n\n".join(blocks)
 
-
-def _mark(x: Any, *, exact: bool = False) -> str:
-    """Format an internal mark to 4 places (``0.6200``).
-
-    With ``exact``, a value with more than 4 places, such as a median ``0.62125``
-    or a float sum ``0.44550000000000006``, is shown in full.
-    """
-    d = dec(x)
-    if exact and d != d.quantize(MARK_QUANTUM):
-        return text(x)
-    return fmt_mark(x)

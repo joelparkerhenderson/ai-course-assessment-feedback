@@ -33,6 +33,7 @@ from marker.scale import (
     FRACTION_SCALE,
     Scale,
     dumps,
+    fmt_percent,
     get_numeric,
     median,
     numeric,
@@ -437,6 +438,12 @@ class GradeTests(DecimalMode):
         self.assertNotEqual(a, compute_fingerprint(Settings(seed=1), RUBRIC, self.essay, None, "d1"))
         self.assertNotEqual(a, compute_fingerprint(Settings(), RUBRIC, self.essay, None, "d2"))
         self.assertNotEqual(a, compute_fingerprint(Settings(), RUBRIC, self.essay, "brief", "d1"))
+        # Unset optional options don't enter the fingerprint (old results stay valid); set ones do.
+        self.assertNotIn("top_k", Settings().fingerprint_dict())
+        self.assertNotEqual(a, compute_fingerprint(Settings(top_k=40), RUBRIC, self.essay, None, "d1"))
+        self.assertNotEqual(a, compute_fingerprint(Settings(extra_options={"num_gpu": 99}), RUBRIC, self.essay, None, "d1"))
+        with self.assertRaises(ValueError):
+            Settings(extra_options={"seed": 1})
 
 
 class EvaluateTests(unittest.TestCase):
@@ -492,6 +499,15 @@ class SecurityTests(unittest.TestCase):
 
 
 class ScaleTests(unittest.TestCase):
+    def test_fmt_percent_bankers_rounding(self):
+        # Half to even on the exact decimal value, not on the binary float.
+        cases = {0.135: "14%", 0.125: "12%", 0.145: "14%", 0.575: "58%", 0.115: "12%",
+                 0.6449: "64%", 0.7: "70%", 0.0: "0%", 1.0: "100%", Decimal("0.6450"): "64%", Decimal("0.6550"): "66%"}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(fmt_percent(value), expected)
+        self.assertEqual(fmt_percent("0.135"), "14%")  # stored JSON string from decimal mode
+
     def test_parse_infers_places(self):
         self.assertEqual(Scale.parse("0.00", "1.00"), Scale(Decimal(0), Decimal(1), 2))
         self.assertEqual(Scale.parse("0", "100"), DEFAULT_SCALE)

@@ -38,6 +38,7 @@ student, and review flags that tell a human which essays need a closer look.
 - [Quick start](#quick-start)
 - [Commands](#commands)
 - [Choosing models](#choosing-models)
+  - [Model options](#model-options)
 - [Comparing models](#comparing-models)
 - [Choosing what to print](#choosing-what-to-print)
 - [Score scale and numeric precision](#score-scale-and-numeric-precision)
@@ -188,11 +189,16 @@ is the file name without its extension.
 | `--out` | `results` | Output directory (one subdirectory per model when there are several) |
 | `--model`, `--family`, `--size`, `--mlx` | `gpt-oss:20b` | Model selection (see [Choosing models](#choosing-models)) |
 | `--show` | `score` | What to print: `score`, `explanation`, `thinking` or `all` (see [Choosing what to print](#choosing-what-to-print)) |
+| `--think` (alias `--reasoning`) | `high` | Reasoning: `low`, `medium`, `high`, `on` or `off`, plus per-model overrides such as `gpt-oss:120b=low` (see [Model options](#model-options)) |
 | `--samples` | `3` | Independent samples per essay (the median is used) |
 | `--seed` | `42` | Base seed; sample *i* uses `seed + i` |
-| `--temperature` | `0.6` | Sampling temperature (non-zero so samples are independent) |
-| `--think` | `high` | Reasoning effort for gpt-oss: `low`, `medium` or `high`. Other thinking models have reasoning switched on |
+| `--temperature` | `0.6` | Sampling temperature, 0-2 (non-zero so samples are independent) |
+| `--top-p` | `1.0` | Nucleus-sampling cut-off |
+| `--top-k`, `--min-p`, `--repeat-penalty` | Ollama's | Further sampling controls; unset unless given |
+| `--num-predict` | no limit | Most tokens per answer, reasoning included |
 | `--num-ctx` | `32768` | Context window (tokens) |
+| `--max-retries` | `2` | Extra attempts after an invalid answer |
+| `--option KEY=VALUE` | none | Any other Ollama option (e.g. `num_gpu=99`), repeatable |
 | `--numeric` | `float` | Numeric type for marks: `float` or `decimal` (exact, 4 places). See [numeric precision](#score-scale-and-numeric-precision) |
 | `--disagreement` | `0.1000` | Flag if marks spread by more than this fraction (10 points), across samples or across models in a comparison |
 | `--boundary-margin` | `0.0200` | Flag a final mark this close below a band boundary (e.g. 0.6800-0.6999 below a First) |
@@ -286,7 +292,46 @@ Exact `--model` tags are always used as given.
 **Reasoning.** gpt-oss gets the `--think` effort level. Other models that
 report the *thinking* capability have reasoning switched on, and models
 without it are run without. The effective setting is recorded in each
-result's provenance.
+result's provenance. See [Model options](#model-options) for `on`/`off` and
+per-model settings.
+
+### Model options
+
+`grade` takes these options for how the model reasons and samples:
+
+| `--think` setting | gpt-oss and fine-tunes | Other thinking models | Models without thinking |
+|---|---|---|---|
+| `low`, `medium`, `high` (default) | that effort level | reasoning on | not sent |
+| `on` | `medium` | reasoning on | not sent |
+| `off` | `low` (gpt-oss can't switch reasoning off; a note is printed) | reasoning off | not sent |
+
+A plain setting applies to every model. `MODEL=SETTING` applies to one exact
+tag, or to a family when there's no `:`. Repeat the option or separate values
+with commas:
+
+```sh
+# High reasoning for gpt-oss:20b, low for the slow 120b, reasoning off for Muse Glimmer.
+python3 -m marker grade paper.md --model gpt-oss:20b,gpt-oss:120b,muse-glimmer:30b-mlx \
+  --think high,gpt-oss:120b=low --think muse-glimmer=off --out results/cmp
+```
+
+Sampling and generation: `--temperature`, `--top-p`, `--top-k`, `--min-p`,
+`--repeat-penalty`, `--num-predict` (token cap, reasoning included),
+`--num-ctx` and `--max-retries`. `--top-k`, `--min-p`, `--repeat-penalty` and
+`--num-predict` are only sent when given. Anything else Ollama accepts can be
+passed with `--option KEY=VALUE`. The value is read as JSON (`99`, `0.5`,
+`true`) or else kept as text. Options that have their own flag, and `seed`,
+can't be set this way.
+
+```sh
+python3 -m marker grade essays/ --think medium --temperature 0.4 --top-k 40 \
+  --num-predict 16384 --option num_gpu=99 --out results/tuned
+```
+
+Every option is recorded in each result's provenance and is part of its
+fingerprint, so changing one re-marks the essays and makes the results a
+different experiment from the defaults. Unset options are left out of the
+fingerprint, so results saved before these options existed are still reused.
 
 **Reproducibility across models.** Every result records its model tag and
 content digest. Results from different models are different experiments, so
@@ -395,6 +440,11 @@ In both modes:
   differs from Python's `round()`, which rounds halves to even.
 - **Bands are continuous:** a mark belongs to the highest band whose minimum
   is at or below it, so a float such as 0.79995 is still a First.
+- **Display:** marks, weights, spreads and agreement rates shown in the
+  terminal (explanations, flags, `rubric`, `compare`, `evaluate`) are whole
+  percents with **banker's rounding** (half to even) on the exact decimal
+  value: `0.135` shows as `14%`, `0.125` as `12%`. This is display only; JSON,
+  CSV and the reported score keep their exact values and half-up rounding.
 - **Configuration stays exact:** values you type (score bounds, thresholds)
   are read as exact decimals and converted to the mode only when used.
 - **Same prompt and fingerprint:** switching mode only **re-analyses** saved

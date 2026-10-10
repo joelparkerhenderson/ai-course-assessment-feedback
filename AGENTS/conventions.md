@@ -24,9 +24,12 @@
   - parse with `parse_float=scale.parse_float()` (TOML and model JSON);
   - keep configuration exact (`Decimal` from `scale.dec()`) and convert it with
     `num()` where it's used;
-  - format marks shown to people with `scale.fmt_mark()` (4 places), and exact
-    output with `scale.text()`; write JSON with `scale.dumps()`;
+  - format marks shown to people with `scale.fmt_percent()` (whole percent,
+    banker's rounding: `0.135` gives `14%`), marks in the prompt with
+    `scale.fmt_mark()` (4 places), and exact output with `scale.text()`;
+    write JSON with `scale.dumps()`;
   - test both modes: Decimal assertions inside `numeric("decimal")`.
-- Rounding: always half up (`scale.quantize`, `scale.round_half_up`), never the
-  built-in `round` (banker's rounding).
+- Rounding: half up for values (`scale.quantize`, `scale.round_half_up`);
+  half to even only for display percents (`scale.fmt_percent`). Never the
+  built-in `round` or `:.0%`, which round the binary float.
 - Line length: 120.

@@ -236,25 +236,98 @@ def select_models(
     return list(dict.fromkeys(chosen))  # dedupe, keep order
 
 
+#: Reasoning effort levels that gpt-oss (and its fine-tunes) accept.
+THINK_LEVELS = ("low", "medium", "high")
+
+#: Every ``--think`` value: an effort level, or ``on``/``off`` for an explicit switch.
+THINK_CHOICES = (*THINK_LEVELS, "on", "off")
+
+#: The default ``--think`` value.
+DEFAULT_THINK = "high"
+
+
+def parse_think(values: list[str] | None, default: str = DEFAULT_THINK) -> tuple[str, dict[str, str]]:
+    """Parse ``--think`` values into a default setting and per-model overrides.
+
+    Each value is either a setting (``low``, ``medium``, ``high``, ``on`` or
+    ``off``), which becomes the default for every model, or ``MODEL=SETTING``,
+    which applies to one model. ``MODEL`` is an exact tag (``gpt-oss:120b``)
+    or a family (``gpt-oss``, matched loosely like ``--family``). Values may be
+    repeated or comma-separated: ``--think high,gpt-oss:120b=low``.
+
+    Returns:
+        ``(default, overrides)``, where ``overrides`` maps the model or family text to its setting.
+
+    Raises:
+        ValueError: An unknown setting, or an empty model name.
+    """
+    overrides: dict[str, str] = {}
+    for raw in values or []:
+        for item in (v.strip() for v in raw.split(",")):
+            if not item:
+                continue
+            target, sep, setting = item.rpartition("=")
+            setting = setting.strip().lower()
+            if setting not in THINK_CHOICES:
+                raise ValueError(f"unknown --think setting {setting!r}; choose from {', '.join(THINK_CHOICES)}")
+            if not sep:
+                default = setting
+            elif not target.strip():
+                raise ValueError(f"--think {item!r}: missing model name before '='")
+            else:
+                overrides[target.strip()] = setting
+    return default, overrides
+
+
+def think_setting(model: str, default: str, overrides: dict[str, str]) -> str:
+    """Pick the ``--think`` setting for one model: an exact-tag override, then a family override, then the default."""
+    if model in overrides:
+        return overrides[model]
+    for target, setting in overrides.items():
+        if ":" not in target and matches_target(model, target):
+            return setting
+    return default
+
+
+def matches_target(model: str, target: str) -> bool:
+    """True if a ``--think`` target names this model: its exact tag, or (without a ``:``) its family."""
+    if ":" in target:
+        return model == target
+    return family_key(split_name(model)[0]) == family_key(target)
+
+
 def think_for(model: str, level: str, capabilities: list[str] | None) -> str | bool | None:
-    """Work out the ``think`` request value for a model.
+    """Work out the ``think`` request value for a model from its ``--think`` setting.
 
     * gpt-oss and its fine-tunes (e.g. ``gpt-oss-safeguard``) always reason and
-      take an effort *level* (``low``, ``medium`` or ``high``).
-    * Other models that report the ``thinking`` capability take a boolean, so reasoning is switched on.
-    * Models without that capability, or with unknown capabilities, get None (``think`` is not sent).
+      take an effort *level*. ``on`` means ``medium``. Their reasoning can't be
+      switched off, so ``off`` means ``low``, the least reasoning available.
+    * Other models that report the ``thinking`` capability take a boolean:
+      ``off`` sends False (reasoning disabled); any other setting sends True.
+      They have no effort levels, so ``low``, ``medium`` and ``high`` all mean on.
+    * Models without that capability, or with unknown capabilities, get None
+      (``think`` is not sent).
 
     Args:
         model: Model name.
-        level: Requested reasoning effort (``--think``).
+        level: The ``--think`` setting for this model (one of :data:`THINK_CHOICES`).
         capabilities: Capabilities from ``/api/show``, or None if unknown.
+
+    Raises:
+        ValueError: ``level`` is not one of :data:`THINK_CHOICES`.
     """
-    family, _ = split_name(model)
-    if family_key(family).startswith("gptoss"):
-        return level
+    if level not in THINK_CHOICES:
+        raise ValueError(f"unknown --think setting {level!r}; choose from {', '.join(THINK_CHOICES)}")
+    if is_gpt_oss(model):
+        return {"on": "medium", "off": "low"}.get(level, level)
     if capabilities and "thinking" in capabilities:
-        return True
+        return level != "off"
     return None
+
+
+def is_gpt_oss(model: str) -> bool:
+    """True for gpt-oss and its fine-tunes, which take a reasoning effort level and can't switch reasoning off."""
+    return family_key(split_name(model)[0]).startswith("gptoss")
 
 
 def slug(model: str) -> str:

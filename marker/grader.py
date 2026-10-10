@@ -28,7 +28,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Protocol
@@ -38,7 +38,7 @@ from .essay import Essay
 from .ollama import OllamaError
 from .prompt import PROMPT_VERSION, build_messages, response_schema, sha256_of
 from .rubric import Rubric
-from .scale import DEFAULT_SCALE, Num, Scale, fmt_mark, get_numeric, median, normalise_mark, num, parse_float, zero
+from .scale import DEFAULT_SCALE, Num, Scale, fmt_percent, get_numeric, median, normalise_mark, num, parse_float, zero
 
 
 class ChatClient(Protocol):
@@ -73,6 +73,13 @@ class Settings:
         temperature: Sampling temperature. It is non-zero on purpose so the samples
             are genuinely independent; the fixed seeds keep them reproducible.
         top_p: Nucleus-sampling cut-off.
+        top_k: Sample only from the ``top_k`` most likely tokens. None leaves it unset (Ollama's default).
+        min_p: Drop tokens less likely than ``min_p`` x the most likely one. None leaves it unset.
+        repeat_penalty: Penalty for repeated tokens (1.0 = none). None leaves it unset.
+        num_predict: Most tokens to generate per answer, reasoning included. None leaves it
+            unset (no limit). Too low a value truncates the JSON and wastes retries.
+        extra_options: Any other Ollama ``options`` (e.g. ``{"num_gpu": 99}``), passed through
+            unchanged. They cannot override the options above (see :data:`MANAGED_OPTIONS`).
         think: Reasoning setting sent to Ollama: an effort level (``"low"``,
             ``"medium"``, ``"high"``) for gpt-oss, True for other thinking
             models, or None to leave it unset (see :func:`marker.models.think_for`).
@@ -100,14 +107,55 @@ class Settings:
     disagreement_threshold: Decimal = Decimal("0.1000")
     boundary_margin: Decimal = Decimal("0.0200")
     keep_reasoning: bool = False
+    top_k: int | None = None
+    min_p: float | None = None
+    repeat_penalty: float | None = None
+    num_predict: int | None = None
+    extra_options: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        clash = MANAGED_OPTIONS & set(self.extra_options)
+        if clash:
+            raise ValueError(f"set {', '.join(sorted(clash))} with its own setting, not as an extra option")
 
     def options_for(self, seed: int) -> dict[str, Any]:
-        """Return the Ollama ``options`` object for one request with the given seed."""
-        return {"temperature": self.temperature, "top_p": self.top_p, "seed": seed, "num_ctx": self.num_ctx}
+        """Return the Ollama ``options`` object for one request with the given seed.
+
+        Optional settings that are None are left out, so Ollama uses its own default.
+        """
+        options: dict[str, Any] = {"temperature": self.temperature, "top_p": self.top_p, "seed": seed, "num_ctx": self.num_ctx}
+        for key in OPTIONAL_OPTIONS:
+            value = getattr(self, key)
+            if value is not None:
+                options[key] = value
+        return {**options, **self.extra_options}
 
     def as_dict(self) -> dict[str, Any]:
         """Return the settings as a plain dict for JSON provenance."""
         return asdict(self)
+
+    def fingerprint_dict(self) -> dict[str, Any]:
+        """The settings that determine the marks, for :func:`compute_fingerprint`.
+
+        ``keep_reasoning`` only changes what is stored, so it is left out. Optional
+        settings that are unset are left out too, so adding a new optional setting
+        doesn't change the fingerprints of existing results.
+        """
+        return {
+            k: v
+            for k, v in self.as_dict().items()
+            if k != "keep_reasoning" and not (k in OPTIONAL_FIELDS and v in (None, {}))
+        }
+
+
+#: Optional Ollama sampling options with their own setting; None means "not sent".
+OPTIONAL_OPTIONS = ("top_k", "min_p", "repeat_penalty", "num_predict")
+
+#: Settings left out of the fingerprint while unset (see :meth:`Settings.fingerprint_dict`).
+OPTIONAL_FIELDS = (*OPTIONAL_OPTIONS, "extra_options")
+
+#: Ollama options that marker sets itself; ``extra_options`` may not override them.
+MANAGED_OPTIONS = frozenset({"temperature", "top_p", "seed", "num_ctx", *OPTIONAL_OPTIONS})
 
 
 class InvalidResponse(ValueError):
@@ -374,7 +422,8 @@ def sample_once(
 #: Version 3: exact Decimal arithmetic; ``score`` on a configurable scale.
 #: Version 4: internal marks are 0.0000-1.0000 Decimals with 4 places.
 #: Version 5: numeric modes; float 0.0-1.0 by default, Decimal optional; continuous band lookup.
-ANALYSIS_VERSION = "5"
+#: Version 6: flag text shows marks as whole percents (banker's rounding).
+ANALYSIS_VERSION = "6"
 
 #: Oldest analysis version whose results use the current mark representation
 #: (0.0000-1.0000 decimals). Older results stored integer 0-100 marks and must be re-marked.
@@ -516,7 +565,7 @@ def analyse(
             "unverified_evidence": unverified,
         }
         if spread > num(settings.disagreement_threshold):
-            flags.append(f"samples disagree on {c.id}: marks [{', '.join(fmt_mark(x) for x in marks)}]")
+            flags.append(f"samples disagree on {c.id}: marks [{', '.join(fmt_percent(x) for x in marks)}]")
         if unverified:
             flags.append(f"{c.id}: {len(unverified)} evidence quote(s) not found in the essay")
 
@@ -530,8 +579,8 @@ def analyse(
     for boundary in rubric.boundaries:
         if num(boundary) - num(settings.boundary_margin) <= final < num(boundary):
             flags.append(
-                f"borderline: {fmt_mark(final)} is within {fmt_mark(settings.boundary_margin)} "
-                f"of the {fmt_mark(boundary)} boundary"
+                f"borderline: {fmt_percent(final)} is within {fmt_percent(settings.boundary_margin)} "
+                f"below the {fmt_percent(boundary)} boundary"
             )
     if essay.word_count < rubric.min_words:
         flags.append(f"word count {essay.word_count} is below the minimum {rubric.min_words}")
@@ -596,8 +645,8 @@ def compute_fingerprint(settings: Settings, rubric: Rubric, essay: Essay, brief:
 
     Two runs with the same fingerprint used the same essay, prompt (which
     includes the rubric and brief), schema, model weights and settings. The CLI
-    uses this to skip essays that are already marked. ``keep_reasoning`` is left
-    out because it changes only what is stored, not the marks.
+    uses this to skip essays that are already marked. See
+    :meth:`Settings.fingerprint_dict` for which settings are included.
 
     Returns:
         A hex SHA-256 digest.
@@ -608,6 +657,6 @@ def compute_fingerprint(settings: Settings, rubric: Rubric, essay: Essay, brief:
             "messages": build_messages(rubric, essay.text, brief),
             "schema": response_schema(rubric),
             "model_digest": model_digest,
-            "settings": {k: v for k, v in settings.as_dict().items() if k != "keep_reasoning"},
+            "settings": settings.fingerprint_dict(),
         }
     )

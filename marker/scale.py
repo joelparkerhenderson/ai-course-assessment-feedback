@@ -40,7 +40,7 @@ import math
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, TypeAlias
 
 #: A mark or score in the current numeric mode: ``float`` (default) or ``Decimal``.
@@ -191,6 +191,20 @@ def text(value: Any) -> str:
 def fmt_mark(value: Any) -> str:
     """Readable 4-place text for a mark, for terminal output: ``0.645`` gives ``"0.6450"``."""
     return f"{quantize(dec(value), MARK_PLACES):f}"
+
+
+def fmt_percent(value: Any) -> str:
+    """Display text for a 0-1 fraction as a whole percent, with banker's rounding (half to even).
+
+    This is the format for every mark, weight and rate shown in the terminal.
+    Rounding uses the exact decimal value (a float's shortest form), so the
+    float ``0.135`` is 13.5% and rounds to ``"14%"``, ``0.125`` rounds to
+    ``"12%"``, and ``0.575`` to ``"58%"`` (``f"{0.575:.0%}"`` gives ``"57%"``,
+    because the binary float is slightly below 0.575). Stored data (JSON, CSV)
+    and reported scores keep their exact values.
+    """
+    n = int(dec(value).scaleb(2).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
+    return f"{n}%"
 
 
 def places_of(written: str) -> int:

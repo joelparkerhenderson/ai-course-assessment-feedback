@@ -37,7 +37,7 @@ from typing import Any
 from .evaluate import quadratic_weighted_kappa
 from .grader import is_compatible
 from .rubric import Rubric
-from .scale import FRACTION_SCALE, Num, Scale, dec, dumps, median, normalise_mark, num, round_half_up, text, zero
+from .scale import FRACTION_SCALE, Num, Scale, dec, dumps, fmt_percent, median, normalise_mark, num, round_half_up, text, zero
 
 #: Default disagreement threshold between models: 0.1 (10 percentage points). Exact configuration value.
 DEFAULT_THRESHOLD = Decimal("0.1000")
@@ -192,7 +192,7 @@ def compare_runs(
         if not same_band:
             notes.append("models place the essay in different bands")
         if spread > num(threshold):
-            notes.append(f"overall marks spread by {spread:.4f} (> {num(threshold):.4f})")
+            notes.append(f"overall marks spread by {fmt_percent(spread)} (> {fmt_percent(threshold)})")
         missing = [m for m in labels if m not in present]
         if missing:
             notes.append(f"not marked by: {', '.join(missing)}")
@@ -363,7 +363,7 @@ def format_report(report: dict[str, Any], rubric: Rubric) -> str:
         lines.append(f"  {'band':<{name_w}}  {cells}")
         lines.append(
             f"  panel mark: {show(e['panel_median'])} ({band_label[e['panel_band']]}), "
-            f"median {e['panel_mark']:.4f}; models agree: {'yes' if e['models_agree'] else 'no'}"
+            f"median {fmt_percent(e['panel_mark'])}; models agree: {'yes' if e['models_agree'] else 'no'}"
         )
         for note in e["notes"]:
             lines.append(f"  - {note}")
@@ -378,7 +378,7 @@ def format_report(report: dict[str, Any], rubric: Rubric) -> str:
         sign = "+" if p["mean_diff"] >= 0 else "-"
         lines.append(
             f"  {p['a']} vs {p['b']}: n={p['n']}  mean diff {sign}{show_diff(abs(p['mean_diff']))}  "
-            f"MAE {show_diff(p['mae'])}  exact band {p['exact_band_agreement']:.0%}  QWK {qwk}"
+            f"MAE {show_diff(p['mae'])}  exact band {fmt_percent(p['exact_band_agreement'])}  QWK {qwk}"
         )
     return "\n".join(lines)
 

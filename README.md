@@ -113,14 +113,19 @@ marker --help
 
 ```sh
 python3 -m marker check                          # Ollama reachable? model installed?
-python3 -m marker grade assets/example-papers/ --out results/example
+python3 -m marker grade assets/example-papers/sample-size-and-study-quality.md \
+  --brief assets/example-briefs/sample-size-and-study-quality.txt --out results/example
 ```
 
-Output on stdout (progress goes to stderr):
+Output on stdout (progress goes to stderr), with `[REVIEW]` added if the essay
+is flagged for a human:
 
 ```
-critical-evaluation-of-research-papers-psychology-essay	<mark>	<band>  [REVIEW]
+sample-size-and-study-quality	<score>	<band>
 ```
+
+The example essay is original and included in the repository. For real
+output from four models, see the [full example](#full-example-four-local-models).
 
 Then open `results/example/<essay-id>.json` for justifications and feedback,
 or `results/example/summary.csv` for the batch overview.
@@ -181,7 +186,8 @@ python3 -m marker rubric --rubric rubrics/uk-undergraduate-essay.toml
 
 Marks `.txt`, `.md` and `.docx` files. Directories are expanded (not
 recursively) in sorted order, skipping README and hidden files. The essay id
-is the file name without its extension.
+is the file name without its extension, so ids must be unique: `grade`
+refuses to start if two essays (e.g. `paper.txt` and `paper.md`) share one.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -197,7 +203,7 @@ is the file name without its extension.
 | `--top-p` | `1.0` | Nucleus-sampling cut-off |
 | `--top-k`, `--min-p`, `--repeat-penalty` | Ollama's | Further sampling controls; unset unless given |
 | `--num-predict` | no limit | Most tokens per answer, reasoning included |
-| `--num-ctx` | `32768` | Context window (tokens) |
+| `--num-ctx` | `32768` | Context window (tokens). Must hold the prompt plus the answer; see below |
 | `--max-retries` | `2` | Extra attempts after an invalid answer |
 | `--option KEY=VALUE` | none | Any other Ollama option (e.g. `num_gpu=99`), repeatable |
 | `--numeric` | `float` | Numeric type for marks: `float` or `decimal` (exact, 4 places). See [numeric precision](#score-scale-and-numeric-precision) |
@@ -217,6 +223,16 @@ from its stored samples** in under a second, with no model calls. Results saved
 by marker versions that used integer 0-100 marks are re-marked automatically.
 
 **Exit codes:** `0` all essays marked or skipped · `1` some essays failed · `2` usage or configuration error.
+
+**Context window.** Ollama doesn't report an error when the prompt (rubric,
+brief and essay) is longer than `--num-ctx`: it silently drops tokens, which
+can remove the marking instructions. marker guards against this. Before
+marking, it estimates the prompt at 3 characters per token (an
+over-estimate) and refuses an essay unless the prompt plus 12,288 tokens for
+the answer (or `--num-predict`, if set) fits, saying which `--num-ctx` to use.
+After each answer it checks Ollama's token counts. A prompt that filled the
+window fails the essay, and a prompt plus answer that overflowed it is
+retried. With the default 32,768 tokens, essays up to about 8,000 words fit.
 
 **Time:** with `--think high` and 3 samples, expect a few minutes per essay
 with `gpt-oss:20b` on Apple Silicon. Use `--think medium` for faster drafts.
@@ -403,12 +419,17 @@ Re-compare saved results at any time with `python3 -m marker compare results/pap
 
 ## Full example: four local models
 
-This is real output from marking the bundled example essay with four local
-models, two samples each and high reasoning. All four are GGUF builds, which
-are seed-deterministic in Ollama (see [Choosing models](#choosing-models)).
+This is real output from marking an example essay with four local models, two
+samples each and high reasoning. The essay
+([`assets/example-papers/sample-size-and-study-quality.md`](assets/example-papers/sample-size-and-study-quality.md))
+and its brief
+([`assets/example-briefs/sample-size-and-study-quality.txt`](assets/example-briefs/sample-size-and-study-quality.txt))
+were written for this project and are in the repository, so you can run the same
+command and compare your output with this. Nothing below has been shortened.
 
 ```sh
-python3 -m marker grade assets/example-papers/ \
+python3 -m marker grade assets/example-papers/sample-size-and-study-quality.md \
+  --brief assets/example-briefs/sample-size-and-study-quality.txt \
   --model mistral-small3.2,gpt-oss:20b,qwen3.8:27b,muse-glimmer:30b \
   --samples 2 \
   --think high \
@@ -435,17 +456,17 @@ reasoning mode.
 ```
 note: mistral-small3.2:latest doesn't report the thinking capability, so --think has no effect on it
 marking 1 essay(s) with mistral-small3.2:latest (5a408ab55df5, think=None), Ollama 0.35.1
-critical-evaluation-of-research-papers-psychology-essay: sample 1/2
-critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+sample-size-and-study-quality: sample 1/2
+sample-size-and-study-quality: sample 2/2
 marking 1 essay(s) with gpt-oss:20b (f38aa0c53da5, think=high), Ollama 0.35.1
-critical-evaluation-of-research-papers-psychology-essay: sample 1/2
-critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+sample-size-and-study-quality: sample 1/2
+sample-size-and-study-quality: sample 2/2
 marking 1 essay(s) with qwen3.8:27b (aaee06c39dcf, think=True), Ollama 0.35.1
-critical-evaluation-of-research-papers-psychology-essay: sample 1/2
-critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+sample-size-and-study-quality: sample 1/2
+sample-size-and-study-quality: sample 2/2
 marking 1 essay(s) with muse-glimmer:30b (de878ce33ad8, think=True), Ollama 0.35.1
-critical-evaluation-of-research-papers-psychology-essay: sample 1/2
-critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+sample-size-and-study-quality: sample 1/2
+sample-size-and-study-quality: sample 2/2
 comparison saved to results/readme-example/comparison.csv and comparison.json
 results in results/readme-example/
 ```
@@ -453,109 +474,141 @@ results in results/readme-example/
 **Output (stdout).** One score line per model, then the comparison:
 
 ```
-critical-evaluation-of-research-papers-psychology-essay	66	Upper second (2:1)	mistral-small3.2:latest  [REVIEW]
-critical-evaluation-of-research-papers-psychology-essay	52	Lower second (2:2)	gpt-oss:20b  [REVIEW]
-critical-evaluation-of-research-papers-psychology-essay	49	Third	qwen3.8:27b  [REVIEW]
-critical-evaluation-of-research-papers-psychology-essay	53	Lower second (2:2)	muse-glimmer:30b  [REVIEW]
+sample-size-and-study-quality	72	First	mistral-small3.2:latest  [REVIEW]
+sample-size-and-study-quality	75	First	gpt-oss:20b
+sample-size-and-study-quality	65	Upper second (2:1)	qwen3.8:27b
+sample-size-and-study-quality	68	Upper second (2:1)	muse-glimmer:30b
 
 Model comparison: 4 models, 1 essay(s); marks shown on 0-100
 
-Essay: critical-evaluation-of-research-papers-psychology-essay
+Essay: sample-size-and-study-quality
   criterion  mistral-small3.2:latest              gpt-oss:20b              qwen3.8:27b         muse-glimmer:30b  spread
-  knowledge                       65                       59                       51                       55      15
-  argument                        61                       49                       48                       52      14
-  evidence                        66                       49                       47                       52      19
-  structure                       72                       56                       54                       57      18
-  writing                         72                       49                       48                       47      25
-  OVERALL                         66                       52                       49                       53      17
-  band            Upper second (2:1)       Lower second (2:2)                    Third       Lower second (2:2)
-  panel mark: 52 (Lower second (2:2)), median 52%; models agree: no
+  knowledge                       69                       76                       65                       68      10
+  argument                        75                       77                       67                       70      10
+  evidence                        70                       71                       62                       66       9
+  structure                       76                       74                       68                       68       8
+  writing                         72                       76                       66                       67       9
+  OVERALL                         72                       75                       65                       68       9
+  band                         First                    First       Upper second (2:1)       Upper second (2:1)
+  panel mark: 70 (First), median 70%; models agree: no
   - models place the essay in different bands
-  - overall marks spread by 17% (> 10%)
-  - flagged for review by: mistral-small3.2:latest, gpt-oss:20b, qwen3.8:27b, muse-glimmer:30b
+  - flagged for review by: mistral-small3.2:latest
 
 Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
-  mistral-small3.2:latest vs gpt-oss:20b: n=1  mean diff +14  MAE 14  exact band 0%  QWK n/a (needs 2+ essays)
-  mistral-small3.2:latest vs qwen3.8:27b: n=1  mean diff +17  MAE 17  exact band 0%  QWK n/a (needs 2+ essays)
-  mistral-small3.2:latest vs muse-glimmer:30b: n=1  mean diff +13  MAE 13  exact band 0%  QWK n/a (needs 2+ essays)
-  gpt-oss:20b vs qwen3.8:27b: n=1  mean diff +3  MAE 3  exact band 0%  QWK n/a (needs 2+ essays)
-  gpt-oss:20b vs muse-glimmer:30b: n=1  mean diff -1  MAE 1  exact band 100%  QWK n/a (needs 2+ essays)
-  qwen3.8:27b vs muse-glimmer:30b: n=1  mean diff -4  MAE 4  exact band 0%  QWK n/a (needs 2+ essays)
+  mistral-small3.2:latest vs gpt-oss:20b: n=1  mean diff -2  MAE 2  exact band 100%  QWK n/a (needs 2+ essays)
+  mistral-small3.2:latest vs qwen3.8:27b: n=1  mean diff +7  MAE 7  exact band 0%  QWK n/a (needs 2+ essays)
+  mistral-small3.2:latest vs muse-glimmer:30b: n=1  mean diff +5  MAE 5  exact band 0%  QWK n/a (needs 2+ essays)
+  gpt-oss:20b vs qwen3.8:27b: n=1  mean diff +9  MAE 9  exact band 0%  QWK n/a (needs 2+ essays)
+  gpt-oss:20b vs muse-glimmer:30b: n=1  mean diff +7  MAE 7  exact band 0%  QWK n/a (needs 2+ essays)
+  qwen3.8:27b vs muse-glimmer:30b: n=1  mean diff -2  MAE 2  exact band 100%  QWK n/a (needs 2+ essays)
 ```
 
 **Reading it.**
 
-- The three reasoning models agree closely: 49, 52 and 53, within 4 points.
-  Mistral Small 3.2, the only model without reasoning, is 13-17 points more
-  generous on every criterion, and most of all on structure and writing.
+- The models range from 65 to 75, and they split on the band: Mistral and
+  gpt-oss give a First, while Qwen and Muse Glimmer give a 2:1. Three of the
+  four give evidence their lowest mark; Mistral marks knowledge lowest.
 - With four models, the panel mark is the midpoint of the middle two marks
-  (0.5185 and 0.5250 give 0.52175, so 52, a 2:2). One generous model can't
-  pull the panel mark up the way it would pull up a mean.
-- The essay is flagged because the models put it in different bands and
-  their overall marks spread by 17 points, more than `--disagreement` (10).
-  Each model also flagged it for its own reasons:
-
-  | Model | Its review flags |
-  |---|---|
-  | mistral-small3.2 | samples disagree on argument: marks [55%, 67%]; evidence: 1 evidence quote(s) not found in the essay |
-  | gpt-oss:20b | samples disagree on knowledge: marks [65%, 52%]; argument: 2 evidence quote(s) not found in the essay; samples disagree on structure: marks [65%, 47%]; model raised integrity concerns |
-  | qwen3.8:27b | borderline: 49% is within 2% below the 50% boundary; model raised integrity concerns |
-  | muse-glimmer:30b | model raised integrity concerns |
-
-  A human should moderate this essay; see
-  [moderate-flagged-essays](skills/moderate-flagged-essays/SKILL.md).
+  (0.67725 and 0.72425 give 0.70075). That rounds to 70, which is exactly on
+  the First boundary. The borderline flag only covers marks just *below* a
+  boundary, so it doesn't fire, but the band split does.
+- The overall spread is 9 points, within `--disagreement` (10), so the spread
+  alone isn't flagged. The band split is, so the models "don't agree" and the
+  essay should be moderated
+  ([moderate-flagged-essays](skills/moderate-flagged-essays/SKILL.md)).
+- Only Mistral's own result is flagged for review: one of its quotes isn't in
+  the essay (see below). The other three models raised no flags.
 
 **One model's explanation.** `marker show` prints the reasons from the saved
-result without calling the model again. Here is gpt-oss:20b, with three of the
-five criteria and the feedback lists shortened (`[...]`) to keep this section
-readable; everything else is exactly as printed:
+result without calling the model again. This is gpt-oss:20b, in full:
 
 ```
 $ python3 -m marker show results/readme-example/gpt-oss_20b --show explanation
-== critical-evaluation-of-research-papers-psychology-essay  (gpt-oss:20b)
-Score: 52 on 0-100  Lower second (2:2)  (mark 52%)
+== sample-size-and-study-quality  (gpt-oss:20b)
+Score: 75 on 0-100  First  (mark 75%)
 
 [knowledge] Knowledge, understanding and relevance to the question  weight 20%
-  mark 58%  band lower_second  (samples: 65%, 52%; spread 13%)
-  Lower second – The essay demonstrates a generally accurate but uneven understanding; it offers
-  generic definitions and limited depth, drifting from the question, matching the descriptor.
-    > "The researcher is going to critique two different studies, one of them from China and the
-    second study is local relevant to Oman."
+  mark 76%  band first  (samples: 77%, 74%; spread 3%)
+  The essay demonstrates a thorough, accurate and nuanced understanding of the role of sample size
+  and other factors. It directly addresses the question, citing key concepts such as power,
+  precision and replication, and extends the discussion to measurement validity, design, and
+  representativeness. This aligns with the First band descriptor of a fully and directly answering
+  the question with depth.
+    > "The main reason sample size matters is statistical power. Power is the probability that a
+    study will detect an effect if the effect really exists."
+    > "Measurement is also linked to validity in a wider sense. Many psychology studies use
+    convenience measures, such as reaction times in a computer task, as stand‑ins for complex
+    everyday behaviour."
 
 [argument] Argument and critical analysis  weight 30%
-  mark 49%  band third  (samples: 52%, 46%; spread 6%)
-  Third – The essay presents a weak, underdeveloped argument that is mostly descriptive; it offers
-  isolated critiques but lacks a sustained, coherent, independent argument, fitting the descriptor.
-    > "While (Bell, 2011) failed to outline details about sampling and sample size that was drawn
-    from research population as well as type of sample used in the studies."  [NOT FOUND IN ESSAY]
+  mark 77%  band first  (samples: 78%, 76%; spread 2%)
+  The essay presents a clear thesis and a sustained, coherent argument. It critically evaluates
+  competing positions, such as the claim that sample size is the most important factor, and
+  convincingly weighs counter‑arguments. This satisfies the First band criterion.
+    > "This essay will argue that sample size is important, because it affects statistical power and
+    the precision of estimates, but that it is not the most important factor in the quality of a
+    psychology study."
 
-[...evidence, structure and writing...]
+[evidence] Use of evidence and sources  weight 20%
+  mark 71%  band first  (samples: 66%, 75%; spread 9%)
+  The essay incorporates a wide range of relevant, high‑quality sources, critically evaluates them,
+  and integrates them seamlessly into the argument. This satisfies the 'First' band criteria for
+  evidence use.
+    > "Button et al. (2013) estimated that the median statistical power of studies in neuroscience
+    was only about 21%, which means that most real effects would be missed."
+    > "Henrich, Heine and Norenzayan (2010) pointed out that most psychology participants come from
+    Western, Educated, Industrialised, Rich and Democratic (WEIRD) societies, and often they are
+    undergraduate students."
+
+[structure] Structure and organisation  weight 15%
+  mark 74%  band first  (samples: 76%, 72%; spread 4%)
+  The essay is well organised with clear headings, logical progression, effective signposting and a
+  conclusion that follows from the argument. This meets the First band descriptor.
+    > "## Why sample size matters"
+    > "## Design and analysis"
+
+[writing] Academic writing, style and referencing  weight 15%
+  mark 76%  band first  (samples: 78%, 73%; spread 5%)
+  The writing is clear, precise, and maintains an academic register. Grammar and spelling are
+  correct, and APA referencing is consistent and accurate. This aligns with the First band.
+    > "Measurement is also linked to validity in a wider sense. Many psychology studies use
+    convenience measures, such as reaction times in a computer task, as stand‑ins for complex
+    everyday behaviour."
 
 Strengths:
-  - The essay covers a wide range of components relevant to research critique, such as research
-  problem, questions, objectives, significance, literature review, theoretical framework,
-  methodology, sampling, instruments, validity, reliability, data collection, data analysis,
-  findings, and ethical considerations.
-  [...]
+  - Clear thesis and balanced argument.
+  - Logical, well‑structured layout with explicit headings.
+  - Good integration of relevant literature and APA referencing.
+  - Fluent, academic writing with minimal errors.
 Improvements:
-  - Develop a concise, explicit thesis statement in the introduction that frames the overall
-  argument of the essay.
-  - Move from descriptive statements to a sustained, critical evaluation that compares the strengths
-  and weaknesses of the two papers in a coherent way.
-  [...]
-Integrity concerns (for a human to check):
-  - Inconsistent referencing style and questionable authenticity of cited works.
-  [...]
-Review flags:
-  - samples disagree on knowledge: marks [65%, 52%]
-  - argument: 2 evidence quote(s) not found in the essay
-  - samples disagree on structure: marks [65%, 47%]
-  - model raised integrity concerns
+  - Include more recent studies or meta‑analyses to strengthen the evidence base.
+  - Discuss effect‑size considerations in more depth, especially how precision relates to practical
+  significance.
+  - Provide more concrete examples of how design or measurement issues can outweigh sample size.
+  - Add explicit transitions between sections to improve flow.
+  - Ensure all reference formatting follows strict APA style (e.g., italics for journal titles).
+Review flags: none
 ```
 
-`[NOT FOUND IN ESSAY]` marks a quote the model presented as evidence but which
-isn't in the essay. Here it seems to be a paraphrase, so a human should check
-that criterion.
+**Why Mistral was flagged.** In its structure criterion, Mistral quoted two
+sentences from the introduction as one passage, but the essay has another
+sentence between them. marker checks every quote against the essay, so the
+misquote is marked and flagged. Here is that part of its explanation:
+
+```
+[structure] Structure and organisation  weight 15%
+  mark 76%  band first  (samples: 75%, 77%; spread 2%)
+  The essay is well organized with a clear introduction, logical progression of paragraphs, and a
+  conclusion that follows from the argument. The structure actively strengthens the argument, with
+  each section purposeful and well signposted.
+    > "This essay will argue that sample size is important, because it affects statistical power and
+    the precision of estimates, but that it is not the most important factor in the quality of a
+    psychology study. The essay first explains why sample size matters, then discusses three other
+    factors, and finally considers what this means for judging research."  [NOT FOUND IN ESSAY]
+    > "In conclusion, sample size is an important part of the quality of a psychology study because
+    it determines power and precision, and the replication crisis has shown the costs of small
+    samples."
+```
 
 **Files written.**
 
@@ -565,7 +618,7 @@ results/readme-example/
 ├── comparison.json
 ├── gpt-oss_20b/
 │   ├── audit.jsonl
-│   ├── critical-evaluation-of-research-papers-psychology-essay.json
+│   ├── sample-size-and-study-quality.json
 │   └── summary.csv
 ├── mistral-small3.2_latest/   (same three files)
 ├── muse-glimmer_30b/          (same three files)
@@ -573,58 +626,64 @@ results/readme-example/
 ```
 
 `gpt-oss_20b/summary.csv`. The criterion columns are the exact internal
-fractions, so `0.49` means 49%:
+fractions, so `0.77` means 77%:
 
 ```
 id,score,score_min,score_max,mark,band,needs_review,knowledge,argument,evidence,structure,writing,word_count,flags,model,model_digest
-critical-evaluation-of-research-papers-psychology-essay,52,0,100,0.5185,Lower second (2:2),yes,0.585,0.49,0.485,0.56,0.49,3502,"samples disagree on knowledge: marks [65%, 52%]; argument: 2 evidence quote(s) not found in the essay; samples disagree on structure: marks [65%, 47%]; model raised integrity concerns",gpt-oss:20b,f38aa0c53da5f8c49d08c43a99df24ff53167fe68e24664a7777288e7656fdfe
+sample-size-and-study-quality,75,0,100,0.74725,First,no,0.755,0.77,0.7050000000000001,0.74,0.755,1285,,gpt-oss:20b,f38aa0c53da5f8c49d08c43a99df24ff53167fe68e24664a7777288e7656fdfe
 ```
 
-`comparison.csv` has one row per essay. Marks are exact, so with the default
-float mode they can show binary floating-point tails such as
-`0.48950000000000005` (use `--numeric decimal` for exact 4-place values):
+`comparison.csv` has one row per essay. The marks are stored exactly as
+computed, so with the default float mode some show binary floating-point
+tails, such as `0.7050000000000001`. Use `--numeric decimal` for exact
+4-place values:
 
 ```
 id,mistral-small3.2:latest mark,gpt-oss:20b mark,qwen3.8:27b mark,muse-glimmer:30b mark,mistral-small3.2:latest score,gpt-oss:20b score,qwen3.8:27b score,muse-glimmer:30b score,mistral-small3.2:latest band,gpt-oss:20b band,qwen3.8:27b band,muse-glimmer:30b band,spread,panel_median,panel_mark,panel_score,panel_band,models_agree,notes
-critical-evaluation-of-research-papers-psychology-essay,0.65925,0.5185,0.48950000000000005,0.525,66,52,49,53,Upper second (2:1),Lower second (2:2),Third,Lower second (2:2),0.16974999999999996,0.5217499999999999,0.5217499999999999,52,Lower second (2:2),no,"models place the essay in different bands; overall marks spread by 17% (> 10%); flagged for review by: mistral-small3.2:latest, gpt-oss:20b, qwen3.8:27b, muse-glimmer:30b"
+sample-size-and-study-quality,0.7242500000000001,0.74725,0.654625,0.6772500000000001,72,75,65,68,First,First,Upper second (2:1),Upper second (2:1),0.09262499999999996,0.7007500000000001,0.7007500000000001,70,First,no,models place the essay in different bands; flagged for review by: mistral-small3.2:latest
 ```
 
-**Provenance** from `gpt-oss_20b/<essay>.json` records everything needed to
-reproduce the result:
+**Provenance** from `gpt-oss_20b/sample-size-and-study-quality.json` records
+everything needed to reproduce the result:
 
 ```json
 "provenance": {
   "marker_version": "0.1.0",
   "prompt_version": "2.0.0",
-  "analysis_version": "6",
-  "prompt_sha256": "50d0799be3103316318ee5703ab3130c6f80bbe29bd4ff4fd2be32f5d62ff8b8",
+  "analysis_version": "7",
+  "prompt_sha256": "c544b3db20644860416d22ffa07f8a0e41bd6c3b5e783d71132355399e6f1695",
   "schema_sha256": "498ab0e5492342688299b78697cb42c6a67a5a99a252d87f067fdaf0b21289c2",
   "rubric": {"name": "UK undergraduate essay (generic)", "version": "2.0.0", "sha256": "86ff69d41833d0863d45b758684cb007f8bc6ce8548128089f96e5adc23eef6c"},
+  "brief_sha256": "e8a3385553d1b825fe066d47c9032bfdb304e0b287e01565c54a45b0a86d194a",
   "model": "gpt-oss:20b",
   "model_digest": "f38aa0c53da5f8c49d08c43a99df24ff53167fe68e24664a7777288e7656fdfe",
   "ollama_version": "0.35.1",
-  "fingerprint": "a1addedc0c5f8fbf86e722b1811e80f31a4d7c924536b5e6a94a309f7860a49d",
+  "fingerprint": "5a3ce8730b520046779f4719950f079fac16c3cdc66daf049af04a9935555ae9",
   "settings": {"model": "gpt-oss:20b", "samples": 2, "seed": 42, "temperature": 0.6, "top_p": 1.0, "think": "high", "num_ctx": 32768, "max_retries": 2, "disagreement_threshold": "0.1000", "boundary_margin": "0.0200", "keep_reasoning": false, "top_k": null, "min_p": null, "repeat_penalty": null, "num_predict": null, "extra_options": {}},
   ...
 }
 ```
 
-**Time.** The whole run took 24 minutes on an Apple Silicon Mac. Each
-sample's time and generated tokens (reasoning included) are saved in the result:
+**Time.** The run took 24 minutes on an Apple Silicon Mac. Each sample's time
+and generated tokens (reasoning included) are saved in the result. Every
+prompt was about 3,700-4,000 tokens, well inside the 32,768-token context window:
 
 | Model | Sample 1 | Sample 2 | Total |
 |---|---|---|---|
-| mistral-small3.2 | 100 s, 1,206 tokens | 64 s, 1,099 tokens | 2.7 min |
-| gpt-oss:20b | 254 s, 11,050 tokens | 107 s, 6,322 tokens | 6.0 min |
-| qwen3.8:27b | 314 s, 3,587 tokens | 283 s, 3,982 tokens | 10.0 min |
-| muse-glimmer:30b | 161 s, 2,508 tokens | 153 s, 3,019 tokens | 5.2 min |
+| mistral-small3.2 | 118 s, 1,138 tokens | 78 s, 1,067 tokens | 3.3 min |
+| gpt-oss:20b | 167 s, 7,199 tokens | 76 s, 3,665 tokens | 4.1 min |
+| qwen3.8:27b | 339 s, 3,793 tokens | 310 s, 4,145 tokens | 10.8 min |
+| muse-glimmer:30b | 219 s, 3,440 tokens | 159 s, 3,056 tokens | 6.3 min |
 
-Running the same command again finishes in under a second: every input is
-unchanged, so each saved result is reused and the comparison is rebuilt
-(`--force` re-marks). With the same Ollama version and model digests, a
-forced re-run should reproduce these marks exactly, because all four are GGUF
-builds and use the fixed seeds 42 and 43. Identical GGUF output for the same
-seed was verified for gpt-oss:20b and Mistral Small; MLX builds don't give it.
+**Reproducibility, verified.** The same command was run a second time into a
+fresh output directory, so nothing was reused. For all four models, the
+fingerprints were identical and every raw model answer was byte-for-byte
+identical (8 of 8 samples), so the marks, flags and printed output were exactly
+the same. This holds because all four are GGUF builds with fixed seeds (42 and
+43) and the same Ollama version and model digests. MLX builds don't reproduce
+like this (see [Choosing models](#choosing-models)). Running the command again
+into the *same* directory finishes in under a second: every input is
+unchanged, so the saved results are reused (`--force` re-marks).
 
 ## Choosing what to print
 

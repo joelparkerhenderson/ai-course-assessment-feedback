@@ -453,6 +453,16 @@ def cmd_grade(args: argparse.Namespace) -> int:
     if not essays:
         eprint("no essays found")
         return 2
+    # The id (file name without extension) names the result file, so two essays with one id would overwrite each other.
+    by_id: dict[str, list[str]] = {}
+    for loaded in essays:
+        by_id.setdefault(loaded.id, []).append(loaded.path)
+    clashes = {i: paths for i, paths in by_id.items() if len(paths) > 1}
+    if clashes:
+        for i, paths in clashes.items():
+            eprint(f"error: essays share the id {i!r} and would overwrite each other's results: {', '.join(paths)}")
+        eprint("rename them so each file name (without extension) is unique")
+        return 2
 
     client = make_client(args)
     # Record the exact server once per run; it goes into every result's provenance.

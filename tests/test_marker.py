@@ -16,6 +16,7 @@ from marker.cli import DEFAULT_RUBRIC, main
 from marker.essay import count_words, expand_paths, load_essay
 from marker.evaluate import evaluate, quadratic_weighted_kappa
 from marker.grader import (
+    ContextOverflow,
     InvalidResponse,
     Settings,
     compute_fingerprint,
@@ -108,6 +109,59 @@ def write_essay(directory: Path, name: str, text: str = ESSAY_TEXT) -> Path:
     path = directory / name
     path.write_text(text, encoding="utf-8")
     return path
+
+
+class TokenClient(FakeClient):
+    """A FakeClient that also reports token counts and why generation stopped, like Ollama does."""
+
+    def __init__(self, answers: list[str], prompt_tokens: int, answer_tokens: int, done_reason: str = "stop"):
+        super().__init__(answers)
+        self.usage = {"prompt_eval_count": prompt_tokens, "eval_count": answer_tokens, "done_reason": done_reason}
+
+    def chat(self, model, messages, *, schema, options, think):
+        return {**super().chat(model, messages, schema=schema, options=options, think=think), **self.usage}
+
+
+class ContextWindowTests(unittest.TestCase):
+    """Ollama silently truncates a prompt longer than num_ctx, so marker must refuse rather than mark it."""
+
+    def setUp(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.essay = load_essay(write_essay(Path(d), "essay.txt"))
+        self.marks = dict(knowledge=60, argument=60, evidence=60, structure=60, writing=60)
+
+    def test_preflight_refuses_a_prompt_that_cannot_fit(self):
+        client = FakeClient([answer(self.marks)])
+        with self.assertRaises(ContextOverflow) as cm:
+            grade_essay(client, Settings(samples=1, num_ctx=4096), RUBRIC, self.essay)
+        self.assertIn("--num-ctx 16384", str(cm.exception))
+        self.assertEqual(client.seeds, [])  # refused before any model call
+        # num_predict replaces the default answer reserve, so a small cap fits.
+        result = grade_essay(FakeClient([answer(self.marks)]), Settings(samples=1, num_ctx=8192, num_predict=2048), RUBRIC, self.essay)
+        self.assertEqual(result["score"]["value"], 60)
+
+    def test_truncated_prompt_fails_without_retrying(self):
+        client = TokenClient([answer(self.marks)] * 3, prompt_tokens=32768, answer_tokens=50)
+        with self.assertRaises(ContextOverflow):
+            grade_essay(client, Settings(samples=1), RUBRIC, self.essay)
+        self.assertEqual(client.seeds, [42])
+
+    def test_overflow_during_generation_is_retried_then_fails(self):
+        client = TokenClient([answer(self.marks)] * 3, prompt_tokens=4000, answer_tokens=30000)
+        with self.assertRaises(OllamaError) as cm:
+            grade_essay(client, Settings(samples=1), RUBRIC, self.essay)
+        self.assertIn("overflowed --num-ctx 32768", str(cm.exception))
+        self.assertEqual(client.seeds, [42, 1042, 2042])
+
+    def test_token_limit_is_explained(self):
+        client = TokenClient(['{"criteria": {"knowl'] * 3, prompt_tokens=4000, answer_tokens=100, done_reason="length")
+        with self.assertRaises(OllamaError) as cm:
+            grade_essay(client, Settings(samples=1), RUBRIC, self.essay)
+        self.assertIn("hit the token limit", str(cm.exception))
+
+    def test_normal_token_counts_pass(self):
+        client = TokenClient([answer(self.marks)], prompt_tokens=4000, answer_tokens=11000)
+        self.assertEqual(grade_essay(client, Settings(samples=1), RUBRIC, self.essay)["score"]["value"], 60)
 
 
 class FloatRubricTests(unittest.TestCase):
@@ -431,6 +485,13 @@ class GradeTests(DecimalMode):
         self.assertIn("borderline", flags)  # medians are all 0.68, within 0.02 below the 0.70 boundary
         self.assertTrue(result["needs_review"])
 
+    def test_repeated_misquote_counts_once(self):
+        marks = {"knowledge": 65, "argument": 65, "evidence": 65, "structure": 65, "writing": 65}
+        bad = "A quote that is not in the essay at all"
+        client = FakeClient([answer(marks, bad), answer(marks, bad)])
+        result = grade_essay(client, Settings(samples=2), RUBRIC_D, self.essay)
+        self.assertEqual(result["criteria"]["argument"]["unverified_evidence"], [bad])
+        self.assertIn("argument: 1 evidence quote(s) not found in the essay", result["flags"])
 
     def test_fingerprint_changes_with_inputs(self):
         a = compute_fingerprint(Settings(), RUBRIC, self.essay, None, "d1")

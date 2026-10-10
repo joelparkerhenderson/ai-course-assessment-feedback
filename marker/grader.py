@@ -162,6 +162,51 @@ class InvalidResponse(ValueError):
     """The model's answer was not valid JSON or did not satisfy the rubric's schema."""
 
 
+class ContextOverflow(OllamaError):
+    """The prompt doesn't fit in the context window, so Ollama would silently truncate it.
+
+    Ollama doesn't report an error when a prompt is longer than ``num_ctx``: it
+    drops tokens, which can remove the rubric and instructions, and the model
+    then answers a prompt it never fully saw. Retrying can't help, so this
+    fails the essay with advice to raise ``--num-ctx``.
+    """
+
+
+#: Conservative characters per token for the pre-flight estimate. English is
+#: about 4 characters per token for these models; 3 over-estimates, so the check
+#: errs towards refusing.
+CHARS_PER_TOKEN = 3
+
+#: Tokens kept free for the answer (reasoning included) when ``num_predict`` is unset.
+#: gpt-oss at high effort has used about 11,000 tokens on one essay.
+ANSWER_RESERVE = 12288
+
+
+def check_context(settings: Settings, messages: list[dict[str, str]]) -> None:
+    """Refuse a prompt that might not fit in ``num_ctx`` with room left for the answer.
+
+    Raises:
+        ContextOverflow: The estimated prompt length plus the answer reserve exceeds ``num_ctx``.
+    """
+    chars = sum(len(m["content"]) for m in messages)
+    estimate = -(-chars // CHARS_PER_TOKEN)  # ceiling division
+    reserve = settings.num_predict or ANSWER_RESERVE
+    if estimate + reserve > settings.num_ctx:
+        raise ContextOverflow(
+            f"the prompt is about {estimate} tokens and the answer needs up to {reserve}, "
+            f"which may not fit in --num-ctx {settings.num_ctx}; Ollama would silently truncate it. "
+            f"Use --num-ctx {_next_ctx(estimate + reserve)} or more"
+        )
+
+
+def _next_ctx(tokens: int) -> int:
+    """The smallest power of two of at least ``tokens`` (context sizes are conventionally powers of two)."""
+    n = 1024
+    while n < tokens:
+        n *= 2
+    return n
+
+
 # --- Prompt-injection heuristics --------------------------------------------------
 # Students may (deliberately or not) include text aimed at an AI marker. The prompt
 # already tells the model to ignore such text; these patterns *also* flag the
@@ -391,10 +436,25 @@ def sample_once(
         )
         msg = resp.get("message", {})
         content = msg.get("content", "")
+        prompt_tokens, answer_tokens = resp.get("prompt_eval_count"), resp.get("eval_count")
+        if isinstance(prompt_tokens, int) and prompt_tokens >= settings.num_ctx - 16:
+            # Ollama filled the window with the prompt, so it truncated it. Retrying can't help.
+            raise ContextOverflow(
+                f"the prompt filled the {settings.num_ctx}-token context window ({prompt_tokens} tokens), "
+                f"so Ollama truncated it; raise --num-ctx"
+            )
+        if isinstance(prompt_tokens, int) and isinstance(answer_tokens, int) and prompt_tokens + answer_tokens > settings.num_ctx:
+            # Ollama shifts the context when generation overflows it, dropping early prompt tokens mid-answer.
+            errors.append(
+                f"seed {attempt_seed}: prompt ({prompt_tokens}) + answer ({answer_tokens}) tokens overflowed "
+                f"--num-ctx {settings.num_ctx}"
+            )
+            continue
         try:
             parsed, notes = parse_response(content, rubric)
         except InvalidResponse as e:
-            errors.append(f"seed {attempt_seed}: {e}")
+            limit = " (hit the token limit: raise --num-predict or --num-ctx)" if resp.get("done_reason") == "length" else ""
+            errors.append(f"seed {attempt_seed}: {e}{limit}")
             continue
         record: dict[str, Any] = {
             "seed": attempt_seed,
@@ -423,7 +483,8 @@ def sample_once(
 #: Version 4: internal marks are 0.0000-1.0000 Decimals with 4 places.
 #: Version 5: numeric modes; float 0.0-1.0 by default, Decimal optional; continuous band lookup.
 #: Version 6: flag text shows marks as whole percents (banker's rounding).
-ANALYSIS_VERSION = "6"
+#: Version 7: an unverified quote repeated by several samples is counted once.
+ANALYSIS_VERSION = "7"
 
 #: Oldest analysis version whose results use the current mark representation
 #: (0.0000-1.0000 decimals). Older results stored integer 0-100 marks and must be re-marked.
@@ -487,10 +548,12 @@ def grade_essay(
         * ``provenance``: everything needed to reproduce or audit the result.
 
     Raises:
+        ContextOverflow: The prompt doesn't fit in ``num_ctx`` (checked before and after each request).
         OllamaError: A sample couldn't be obtained.
     """
     messages = build_messages(rubric, essay.text, brief)
     schema = response_schema(rubric)
+    check_context(settings, messages)
 
     samples: list[dict[str, Any]] = []
     for i in range(settings.samples):
@@ -551,7 +614,10 @@ def analyse(
         # Feedback comes from the sample closest to the median, so the written
         # justification matches the mark awarded.
         rep = min(samples, key=lambda s: abs(m(s, c.id) - med))["criteria"][c.id]
-        unverified = [q for s in samples for q in s["criteria"][c.id]["evidence"] if not quote_in_essay(q, normalised)]
+        # Each distinct quote counts once, even when several samples repeat the same misquote.
+        unverified = list(dict.fromkeys(
+            q for s in samples for q in s["criteria"][c.id]["evidence"] if not quote_in_essay(q, normalised)
+        ))
         spread = max(marks) - min(marks)
         criteria_out[c.id] = {
             "name": c.name,

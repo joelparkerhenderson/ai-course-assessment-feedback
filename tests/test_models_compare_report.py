@@ -243,6 +243,17 @@ class CliMultiModelTests(unittest.TestCase):
                 self.assertEqual(cli.main([a if a != "40" else "50" for a in argv]), 0)
             self.assertEqual(len(fake.calls), 3)
 
+    def test_grade_refuses_duplicate_essay_ids(self):
+        fake = FakeOllama({})
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(cli, "make_client", return_value=fake):
+            write_essay(Path(d), "paper.txt")
+            write_essay(Path(d), "paper.md")
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                self.assertEqual(cli.main(["grade", d, "--out", str(Path(d) / "out")]), 2)
+            self.assertIn("share the id 'paper'", stderr.getvalue())
+        self.assertEqual(fake.calls, [])
+
     def test_grade_rejects_bad_model_options(self):
         fake = FakeOllama({})
         bad = [["--option", "seed=1"], ["--option", "temperature=0"], ["--option", "nokey"], ["--think", "max"]]

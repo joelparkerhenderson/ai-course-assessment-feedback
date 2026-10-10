@@ -28,7 +28,7 @@ specification records the requirements that came out of it. Requirement ids
 
 | Id | Requirement |
 |----|-------------|
-| IN-1 | Essays as `.txt`, `.md` or `.docx`, given as files or directories (directories skip README and hidden files). The essay id is the file name without its extension. |
+| IN-1 | Essays as `.txt`, `.md` or `.docx`, given as files or directories (directories skip README and hidden files). The essay id is the file name without its extension; `grade` refuses duplicate ids, which would overwrite each other's results. |
 | IN-2 | HTML comments in `.md` files are provenance metadata and are not marked. |
 | IN-3 | An optional assignment brief (plain text) is marked against. |
 | IN-4 | A rubric TOML: bands that tile 0.0000-1.0000 exactly, written to 4 decimal places (each band's max is 0.0001 below the next band's min), and criteria with positive weights summing to exactly 1 and optional per-band descriptors. Values are read in the numeric mode, and validation uses the exact written values. Optional word limits. |
@@ -71,6 +71,7 @@ specification records the requirements that came out of it. Requirement ids
 | MARK-5 | Invalid model output is retried with deterministic derived seeds (`seed + 1000·attempt`), up to `max_retries`. |
 | MARK-6 | The essay is treated as untrusted data: delimited, unable to close its own delimiter, and the model is told never to follow instructions in it. |
 | MARK-7 | Feedback for the student (strengths, improvements) is taken from the most representative sample. |
+| MARK-8 | A prompt must never be silently truncated. Before sampling, a conservative estimate (3 characters per token) of the prompt plus the answer reserve (12,288 tokens, or `num_predict`) must fit in `num_ctx`, or the essay fails with the `--num-ctx` to use. After each answer, a prompt that filled `num_ctx` fails the essay, and prompt + answer tokens over `num_ctx` (a context shift) is retried. |
 
 ## Review flags (`needs_review`)
 

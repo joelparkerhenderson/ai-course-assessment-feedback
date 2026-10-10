@@ -125,6 +125,9 @@ point to the same risks and mitigations:
   *Caveat:* bit-exact determinism across different GPUs, drivers, or Ollama
   versions isn't guaranteed, because floating-point kernels differ. That is
   why the digests and versions are recorded.
+  *Observed:* with Ollama 0.35.1, Apple Silicon **MLX** builds did not honour
+  the seed (identical requests gave different outputs), while GGUF builds did.
+  Use GGUF builds when reproducibility is required.
 - **gpt-oss specifics.** gpt-oss-20b (fits in about 16 GB) and gpt-oss-120b
   are reasoning models with configurable reasoning effort (low/medium/high),
   exposed by Ollama's `think` parameter. Ollama's `format` parameter

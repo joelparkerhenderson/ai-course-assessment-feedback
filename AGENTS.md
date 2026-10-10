@@ -3,7 +3,8 @@
 Guidance for AI coding agents (Claude Code, Codex, Cursor, etc.) working in this repository.
 
 **Project:** `marker` marks student essays 0-100 against an analytic rubric,
-using a **local** gpt-oss model served by Ollama. The priorities, in order, are
+using **local** models served by Ollama (default gpt-oss; any family, size or
+MLX build can be selected, and several models can be compared). The priorities, in order, are
 **security and privacy of student data**, **reproducibility**, and **marking
 validity**. Read `spec/index.md` (requirements) and `docs/research.md` (why the
 method is what it is) before making non-trivial changes.
@@ -30,7 +31,7 @@ python3 -m marker grade assets/example-papers/ --out results/example
 | [AGENTS/marking-methodology.md](AGENTS/marking-methodology.md) | changing how marks are computed or flagged |
 
 Task-level skills for using the tool are in [`skills/`](skills/): mark-essays,
-write-rubric, calibrate-marker, moderate-flagged-essays, prepare-essays.
+compare-models, write-rubric, calibrate-marker, moderate-flagged-essays, prepare-essays.
 
 ## Hard rules
 

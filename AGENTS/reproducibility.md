@@ -22,6 +22,9 @@ every `Settings` field, `fingerprint`, Python version, platform, and a UTC times
   it is a `Settings` field). If it affects only storage, exclude it as
   `keep_reasoning` is excluded.
 - When the prompt or schema wording changes, bump `PROMPT_VERSION`.
+- When the deterministic analysis changes (`grader.analyse`: aggregation,
+  quote matching, flags), bump `ANALYSIS_VERSION`. Saved results are then
+  re-analysed from their stored samples, without calling the model.
 
 ## Known limits
 
@@ -29,3 +32,9 @@ Bit-exact output isn't guaranteed across different hardware, GPU drivers or
 Ollama versions, because floating-point kernels differ. That is why
 `model_digest` and `ollama_version` are recorded. Say so honestly in any
 documentation; don't claim stronger guarantees.
+
+**MLX builds are not seed-deterministic** (observed with Ollama 0.35.1 on
+2026-10-09): `muse-glimmer:30b-mlx` returned different text for identical
+requests with the same seed, and the same essay scored 53, then 50.
+`mistral-small` (GGUF) was identical across runs. `marker grade` warns when it
+uses an MLX build. Re-test this when Ollama is upgraded.

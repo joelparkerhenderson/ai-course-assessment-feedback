@@ -91,7 +91,9 @@ def expand_paths(paths: list[str]) -> list[Path]:
 
     Files given directly are kept as they are, even unsupported ones, so
     :func:`load_essay` can report a clear error. Directory contents are sorted
-    (not recursive), so marking order is stable between runs.
+    (not recursive), so marking order is stable between runs. Inside
+    directories, README files and hidden files are skipped: they document the
+    folder and aren't essays.
 
     Args:
         paths: File and/or directory paths.
@@ -103,10 +105,21 @@ def expand_paths(paths: list[str]) -> list[Path]:
     for raw in paths:
         p = Path(raw)
         if p.is_dir():
-            out.extend(sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_SUFFIXES))
+            out.extend(
+                sorted(
+                    f
+                    for f in p.iterdir()
+                    if f.is_file() and f.suffix.lower() in SUPPORTED_SUFFIXES and not _is_ignored(f)
+                )
+            )
         else:
             out.append(p)
     return out
+
+
+def _is_ignored(path: Path) -> bool:
+    """True for files in an essay directory that aren't essays: READMEs and hidden files."""
+    return path.name.startswith(".") or path.stem.lower() == "readme"
 
 
 def count_words(text: str) -> int:

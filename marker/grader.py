@@ -25,6 +25,7 @@ import platform
 import re
 import statistics
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -69,7 +70,9 @@ class Settings:
         temperature: Sampling temperature. It is non-zero on purpose so the samples
             are genuinely independent; the fixed seeds keep them reproducible.
         top_p: Nucleus-sampling cut-off.
-        think: gpt-oss reasoning effort: ``"low"``, ``"medium"`` or ``"high"``.
+        think: Reasoning setting sent to Ollama: an effort level (``"low"``,
+            ``"medium"``, ``"high"``) for gpt-oss, True for other thinking
+            models, or None to leave it unset (see :func:`marker.models.think_for`).
         num_ctx: Context window in tokens. It must hold the rubric, brief, essay
             and the model's reasoning.
         max_retries: Extra attempts allowed when the model's answer is invalid.
@@ -86,7 +89,7 @@ class Settings:
     seed: int = 42
     temperature: float = 0.6
     top_p: float = 1.0
-    think: str = "high"
+    think: str | bool | None = "high"
     num_ctx: int = 32768
     max_retries: int = 2
     disagreement_threshold: int = 10
@@ -142,27 +145,34 @@ def detect_injection(text: str) -> list[str]:
 
 # --- Evidence verification ----------------------------------------------------------
 # Models sometimes "quote" text that isn't in the essay. Every quote is checked
-# against the essay after normalising typography the model may change.
-_QUOTE_MAP = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", " ": " "})
+# against the essay, ignoring differences that don't change the words: case,
+# punctuation, spacing, Unicode dash and quote variants (e.g. the non-breaking
+# hyphen U+2011 that gpt-oss often writes), and Markdown markup. A paraphrase
+# ("The researcher used..." for "(Manalo, 2012) used...") still fails.
+
+#: Fragments shorter than this many letters and digits are too short to check meaningfully.
+_MIN_FRAGMENT = 8
 
 
 def _normalise(s: str) -> str:
-    """Normalise text for quote matching.
+    """Reduce text to lower-case letters and digits only, for quote matching.
 
-    Curly quotes and dashes become ASCII, the text is lower-cased, Markdown
-    emphasis characters are removed, and whitespace runs collapse to one space.
+    NFKC folds compatibility characters (e.g. full-width letters, ligatures),
+    and everything that isn't a letter or digit (punctuation, dashes, quotes,
+    whitespace, Markdown markup) is dropped. ``"Chi‑Square"`` and
+    ``"chi-square"`` both become ``"chisquare"``, and the essay's typo
+    ``"thelowest"`` matches a quote that says ``"the lowest"``.
     """
-    s = s.translate(_QUOTE_MAP).lower()
-    s = re.sub(r"[*_`#>]", "", s)  # markdown emphasis the model may drop or add
-    return re.sub(r"\s+", " ", s).strip()
+    s = unicodedata.normalize("NFKC", s).lower()
+    return "".join(ch for ch in s if ch.isalnum())
 
 
 def quote_in_essay(quote: str, normalised_essay: str) -> bool:
     """Check that a quoted passage really appears in the essay.
 
-    The quote is split on ellipses (``...``, ``…``, ``[...]``) and every fragment
-    must appear in the essay. Fragments under 8 characters are ignored because
-    they would match almost anything.
+    The quote is split on ellipses (``...``, ``…``, ``[...]``), and every
+    fragment must appear in the essay after :func:`_normalise`. Fragments with
+    fewer than 8 letters and digits are ignored, because they would match almost anything.
 
     Args:
         quote: A passage the model claims to have quoted.
@@ -171,9 +181,8 @@ def quote_in_essay(quote: str, normalised_essay: str) -> bool:
     Returns:
         True if the quote is found, or too short to check meaningfully.
     """
-    q = _normalise(quote).strip(" \"'")
-    fragments = [f.strip(" \"'.,;:") for f in re.split(r"\.\.\.|…|\[\.\.\.\]", q)]
-    fragments = [f for f in fragments if len(f) >= 8]
+    fragments = [_normalise(f) for f in re.split(r"\[\.\.\.\]|\.\.\.|…", quote)]
+    fragments = [f for f in fragments if len(f) >= _MIN_FRAGMENT]
     if not fragments:
         return True  # too short to check meaningfully
     return all(f in normalised_essay for f in fragments)
@@ -195,7 +204,7 @@ def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[s
 
     Args:
         content: The model's raw message content. A surrounding Markdown code
-            fence is tolerated.
+            fence, or prose around the JSON object, is tolerated.
         rubric: The rubric the essay was marked against.
 
     Returns:
@@ -214,7 +223,14 @@ def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[s
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise InvalidResponse(f"not valid JSON: {e}") from e
+        # Some models wrap the JSON in prose even with a schema; try the outermost {...}.
+        start, end = text.find("{"), text.rfind("}")
+        try:
+            if start == -1 or end <= start:
+                raise e
+            data = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            raise InvalidResponse(f"not valid JSON: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("criteria"), dict):
         raise InvalidResponse("missing 'criteria' object")
 
@@ -335,13 +351,18 @@ def sample_once(
             "raw": content,
         }
         if settings.keep_reasoning:
-            # Ollama returns gpt-oss's analysis channel as message.thinking.
+            # Ollama returns the reasoning (gpt-oss's analysis channel) as message.thinking.
             record["reasoning"] = msg.get("thinking", "")
         return record
     raise OllamaError(f"model gave no valid answer after {settings.max_retries + 1} attempts: {errors}")
 
 
 # --- Marking ----------------------------------------------------------------------
+
+#: Version of the deterministic analysis rules (aggregation, quote matching, flags).
+#: Bump it when they change, so that saved results are re-analysed from their stored samples.
+#: Version 2: quote matching ignores punctuation, spacing and Unicode dash variants.
+ANALYSIS_VERSION = "2"
 
 
 def grade_essay(
@@ -394,6 +415,42 @@ def grade_essay(
             progress(f"{essay.id}: sample {i + 1}/{settings.samples}")
         samples.append(sample_once(client, settings, rubric, messages, schema, settings.seed + i))
 
+    return {
+        "essay": {"id": essay.id, "path": essay.path, "word_count": essay.word_count, "sha256": essay.sha256},
+        **analyse(samples, settings, rubric, essay),
+        "samples": samples,
+        "provenance": {
+            "marker_version": __version__,
+            "prompt_version": PROMPT_VERSION,
+            "analysis_version": ANALYSIS_VERSION,
+            "prompt_sha256": sha256_of(messages),
+            "schema_sha256": sha256_of(schema),
+            "rubric": {"name": rubric.name, "version": rubric.version, "sha256": rubric.sha256},
+            "brief_sha256": sha256_of(brief or ""),
+            "model": settings.model,
+            "model_digest": model_digest,
+            "ollama_version": ollama_version,
+            "settings": settings.as_dict(),
+            "fingerprint": compute_fingerprint(settings, rubric, essay, brief, model_digest),
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "marked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
+    }
+
+
+def analyse(samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, essay: Essay) -> dict[str, Any]:
+    """Turn validated samples into marks, feedback and review flags. This step is deterministic and makes no model calls.
+
+    It is kept separate from sampling so that when these rules change
+    (:data:`ANALYSIS_VERSION`), saved results can be re-analysed from their
+    stored samples without querying the model again (see :func:`reanalyse`).
+
+    Returns:
+        The keys ``mark``, ``weighted_mark``, ``band``, ``needs_review``,
+        ``flags``, ``criteria``, ``feedback`` and ``integrity_concerns``, as
+        described in :func:`grade_essay`.
+    """
     normalised = _normalise(essay.text)
     criteria_out: dict[str, dict[str, Any]] = {}
     flags: list[str] = []
@@ -452,7 +509,6 @@ def grade_essay(
     )
 
     return {
-        "essay": {"id": essay.id, "path": essay.path, "word_count": essay.word_count, "sha256": essay.sha256},
         "mark": final,
         "weighted_mark": round(weighted, 2),
         "band": {"id": band.id, "label": band.label},
@@ -461,23 +517,28 @@ def grade_essay(
         "criteria": criteria_out,
         "feedback": {"strengths": rep_sample["strengths"], "improvements": rep_sample["improvements"]},
         "integrity_concerns": concerns,
-        "samples": samples,
-        "provenance": {
-            "marker_version": __version__,
-            "prompt_version": PROMPT_VERSION,
-            "prompt_sha256": sha256_of(messages),
-            "schema_sha256": sha256_of(schema),
-            "rubric": {"name": rubric.name, "version": rubric.version, "sha256": rubric.sha256},
-            "brief_sha256": sha256_of(brief or ""),
-            "model": settings.model,
-            "model_digest": model_digest,
-            "ollama_version": ollama_version,
-            "settings": settings.as_dict(),
-            "fingerprint": compute_fingerprint(settings, rubric, essay, brief, model_digest),
-            "python": platform.python_version(),
-            "platform": platform.platform(),
-            "marked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        },
+    }
+
+
+def reanalyse(result: dict[str, Any], settings: Settings, rubric: Rubric, essay: Essay) -> dict[str, Any]:
+    """Recompute a saved result's marks and flags from its stored samples with the current analysis rules.
+
+    The model isn't called. The samples and the original provenance are kept;
+    ``analysis_version``, ``marker_version`` and ``reanalysed_at`` are updated.
+    Use this only when the fingerprint matches, which means the samples came
+    from the same inputs.
+    """
+    provenance = {
+        **result["provenance"],
+        "marker_version": __version__,
+        "analysis_version": ANALYSIS_VERSION,
+        "reanalysed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    return {
+        "essay": result["essay"],
+        **analyse(result["samples"], settings, rubric, essay),
+        "samples": result["samples"],
+        "provenance": provenance,
     }
 
 

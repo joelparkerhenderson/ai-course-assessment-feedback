@@ -107,6 +107,22 @@ class OllamaClient:
         """Return the Ollama server version string, e.g. ``"0.35.1"``."""
         return self._request("GET", "/api/version").get("version", "unknown")
 
+    def list_models(self) -> list[dict[str, Any]]:
+        """Return the installed models as Ollama's ``/api/tags`` reports them (name, digest, details, ...)."""
+        return list(self._request("GET", "/api/tags").get("models", []))
+
+    def capabilities(self, model: str) -> list[str] | None:
+        """Return a model's capabilities (e.g. ``["completion", "thinking"]``) from ``/api/show``.
+
+        Returns None if they can't be read, for example because Ollama can't
+        load that model's metadata. Callers must treat None as "unknown".
+        """
+        try:
+            caps = self._request("POST", "/api/show", {"model": model}).get("capabilities")
+        except OllamaError:
+            return None
+        return [str(c) for c in caps] if isinstance(caps, list) else None
+
     def model_digest(self, model: str) -> str:
         """Return the content digest of an installed model.
 

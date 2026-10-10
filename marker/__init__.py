@@ -1,4 +1,4 @@
-"""marker: mark student essays 0-100 against a rubric with a local gpt-oss model.
+"""marker: mark student essays 0-100 against a rubric with local Ollama models (default gpt-oss).
 
 Modules:
 
@@ -6,8 +6,11 @@ Modules:
 * :mod:`marker.essay`: read essays from .txt, .md and .docx.
 * :mod:`marker.prompt`: build the marking prompt and the output JSON schema.
 * :mod:`marker.ollama`: minimal, loopback-only Ollama client.
+* :mod:`marker.models`: discover installed models; select them by tag, family, size and MLX build.
 * :mod:`marker.grader`: sample, validate, aggregate and flag one essay.
 * :mod:`marker.evaluate`: agreement metrics against human marks (QWK, MAE, ...).
+* :mod:`marker.compare`: compare several models' results; panel mark; pairwise agreement.
+* :mod:`marker.report`: render the score, explanation and thinking views.
 * :mod:`marker.cli`: the ``marker`` command-line tool.
 
 Library use::

@@ -1,6 +1,6 @@
 ---
 name: mark-essays
-description: Mark student essays 0-100 against a rubric with the local gpt-oss marker (`marker grade`), then summarise the marks, bands and review flags. Use when the user asks to mark, grade or score essays, papers or assignments in this repo.
+description: Mark student essays 0-100 against a rubric with local Ollama models (default gpt-oss) using `marker grade`, choosing models by tag, family, size or MLX build, and showing the score, explanation and/or model thinking. Use when the user asks to mark, grade or score essays, papers or assignments in this repo.
 ---
 
 # Mark essays
@@ -11,8 +11,13 @@ reasoning behind the method.
 
 ## Steps
 
-1. **Preflight.** Run `python3 -m marker check` (add `--model gpt-oss:120b` if
-   that model is wanted).
+1. **Choose models and preflight.** Use `python3 -m marker models` to see what's
+   installed. Turn the user's wording into options:
+   - "gpt-oss 120b": `--model gpt-oss:120b`, or `--family gpt-oss --size 120b`
+   - "ChatGPT-OSS and Muse Glimmer": `--family "ChatGPT-OSS" --family "Muse Glimmer"`
+   - "the Mac-optimised one": `--mlx only` (or the default `auto`, which prefers MLX on Apple Silicon)
+   - two or more models: use the `compare-models` skill instead.
+   Then run `python3 -m marker check` with the same options.
    - "model is not installed": tell the user to run `ollama pull gpt-oss:20b`.
    - HTTP 500 with "unsupported tensor … size overflows": the model blob is
      older than the installed Ollama. Re-pull it with `ollama pull <model>`.
@@ -29,6 +34,8 @@ reasoning behind the method.
    ```sh
    python3 -m marker grade essays/ --brief brief.txt --out results/<batch> [--model gpt-oss:120b]
    ```
+   Add `--show explanation,score` if the user wants the reasons, or
+   `--show thinking` for the model's reasoning trace (`--show all` for everything).
    Keep the defaults (`--samples 3 --seed 42 --temperature 0.6 --think high`)
    unless there is a reason to change them. Any change alters the fingerprint
    and makes runs non-comparable.
@@ -36,7 +43,8 @@ reasoning behind the method.
    - a table of id, mark, band and needs_review;
    - for every flagged essay, its flags in plain language;
    - the model and digest used.
-   Point to the per-essay JSON for criterion-level justification and feedback.
+   For criterion-level justification and feedback, run
+   `python3 -m marker show results/<batch> --show explanation`. It doesn't re-mark anything.
 
 ## Rules
 

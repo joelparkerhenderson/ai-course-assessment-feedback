@@ -276,6 +276,9 @@ class CliMultiModelTests(unittest.TestCase):
             self.assertTrue((out / "gpt-oss_20b" / "paper.json").exists())
             self.assertTrue((out / "muse-glimmer_30b-mlx" / "paper.json").exists())
             self.assertTrue((out / "comparison.csv").exists())
+            # Scores in comparison.csv use the scale's places, like summary.csv: 65, not the float 65.0.
+            row = (out / "comparison.csv").read_text().splitlines()[1].split(",")
+            self.assertEqual(row[3:5], ["65", "58"])
             text = stdout.getvalue()
             self.assertIn("thoughts of gpt-oss:20b", text)
             self.assertIn("paper\t65\tUpper second (2:1)\tgpt-oss:20b", text)

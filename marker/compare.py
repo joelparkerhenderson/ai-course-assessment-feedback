@@ -295,6 +295,12 @@ def write_comparison(out_dir: str | Path, report: dict[str, Any], rubric: Rubric
     labels = report["models"]
     labels_by_id = {b.id: b.label for b in rubric.bands}
     has_scores = report["scale"] is not None
+    scale = Scale.from_dict(report["scale"]) if has_scores else None
+
+    def score_cell(x: Num | None) -> str:
+        """A score with exactly the scale's places, as in summary.csv (``66``, not the float ``66.0``)."""
+        return "" if x is None or scale is None else scale.format(x)
+
     csv_path = out / "comparison.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -308,12 +314,12 @@ def write_comparison(out_dir: str | Path, report: dict[str, Any], rubric: Rubric
                 [
                     e["id"],
                     *[_s(e["marks"].get(m)) for m in labels],
-                    *([_s(e["scores"].get(m)) for m in labels] if has_scores else []),
+                    *([score_cell(e["scores"].get(m)) for m in labels] if has_scores else []),
                     *[labels_by_id.get(e["bands"].get(m, ""), "") for m in labels],
                     _s(e["spread"]),
                     _s(e["panel_median"]),
                     _s(e["panel_mark"]),
-                    *([_s(e["panel_score"])] if has_scores else []),
+                    *([score_cell(e["panel_score"])] if has_scores else []),
                     labels_by_id[e["panel_band"]],
                     "yes" if e["models_agree"] else "no",
                     "; ".join(e["notes"]),

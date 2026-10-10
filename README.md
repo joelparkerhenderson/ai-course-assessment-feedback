@@ -40,6 +40,7 @@ student, and review flags that tell a human which essays need a closer look.
 - [Choosing models](#choosing-models)
   - [Model options](#model-options)
 - [Comparing models](#comparing-models)
+- [Full example: four local models](#full-example-four-local-models)
 - [Choosing what to print](#choosing-what-to-print)
 - [Score scale and numeric precision](#score-scale-and-numeric-precision)
 - [Rubrics](#rubrics)
@@ -386,7 +387,7 @@ Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
   gpt-oss:20b vs muse-glimmer:30b-mlx: n=1  mean diff +7  MAE 7  exact band 0%  QWK n/a (needs 2+ essays)
 ```
 
-*(Illustrative numbers.)*
+*(Illustrative numbers. For real output, see the [full example](#full-example-four-local-models).)*
 
 - **Panel mark**: the exact median of the models' overall marks
   (0.0000-1.0000), shown on the reporting scale and saved as `panel_score`.
@@ -399,6 +400,231 @@ Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
   is more generous), MAE, exact band agreement, QWK, and per-criterion MAE (in the JSON).
 
 Re-compare saved results at any time with `python3 -m marker compare results/paper-compare`.
+
+## Full example: four local models
+
+This is real output from marking the bundled example essay with four local
+models, two samples each and high reasoning. All four are GGUF builds, which
+are seed-deterministic in Ollama (see [Choosing models](#choosing-models)).
+
+```sh
+python3 -m marker grade assets/example-papers/ \
+  --model mistral-small3.2,gpt-oss:20b,qwen3.8:27b,muse-glimmer:30b \
+  --samples 2 \
+  --think high \
+  --out results/readme-example \
+  --show score
+```
+
+Check first that every model loads:
+
+```
+$ python3 -m marker check --model mistral-small3.2,gpt-oss:20b,qwen3.8:27b,muse-glimmer:30b
+Ollama 0.35.1 at http://127.0.0.1:11434
+mistral-small3.2:latest: 5a408ab55df5  24.0B  Q4_K_M  gguf  no thinking
+gpt-oss:20b: f38aa0c53da5  20.9B  MXFP4  gguf  thinking
+qwen3.8:27b: aaee06c39dcf  27.3B  Q4_K_M  gguf  thinking
+muse-glimmer:30b: de878ce33ad8  27.9B  Q4_K_M  gguf  thinking
+```
+
+**Progress (stderr).** Each model marks the whole batch in turn. The `think=`
+value shows what each model actually received: an effort level for gpt-oss,
+`True` for the other thinking models, and nothing for Mistral, which has no
+reasoning mode.
+
+```
+note: mistral-small3.2:latest doesn't report the thinking capability, so --think has no effect on it
+marking 1 essay(s) with mistral-small3.2:latest (5a408ab55df5, think=None), Ollama 0.35.1
+critical-evaluation-of-research-papers-psychology-essay: sample 1/2
+critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+marking 1 essay(s) with gpt-oss:20b (f38aa0c53da5, think=high), Ollama 0.35.1
+critical-evaluation-of-research-papers-psychology-essay: sample 1/2
+critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+marking 1 essay(s) with qwen3.8:27b (aaee06c39dcf, think=True), Ollama 0.35.1
+critical-evaluation-of-research-papers-psychology-essay: sample 1/2
+critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+marking 1 essay(s) with muse-glimmer:30b (de878ce33ad8, think=True), Ollama 0.35.1
+critical-evaluation-of-research-papers-psychology-essay: sample 1/2
+critical-evaluation-of-research-papers-psychology-essay: sample 2/2
+comparison saved to results/readme-example/comparison.csv and comparison.json
+results in results/readme-example/
+```
+
+**Output (stdout).** One score line per model, then the comparison:
+
+```
+critical-evaluation-of-research-papers-psychology-essay	66	Upper second (2:1)	mistral-small3.2:latest  [REVIEW]
+critical-evaluation-of-research-papers-psychology-essay	52	Lower second (2:2)	gpt-oss:20b  [REVIEW]
+critical-evaluation-of-research-papers-psychology-essay	49	Third	qwen3.8:27b  [REVIEW]
+critical-evaluation-of-research-papers-psychology-essay	53	Lower second (2:2)	muse-glimmer:30b  [REVIEW]
+
+Model comparison: 4 models, 1 essay(s); marks shown on 0-100
+
+Essay: critical-evaluation-of-research-papers-psychology-essay
+  criterion  mistral-small3.2:latest              gpt-oss:20b              qwen3.8:27b         muse-glimmer:30b  spread
+  knowledge                       65                       59                       51                       55      15
+  argument                        61                       49                       48                       52      14
+  evidence                        66                       49                       47                       52      19
+  structure                       72                       56                       54                       57      18
+  writing                         72                       49                       48                       47      25
+  OVERALL                         66                       52                       49                       53      17
+  band            Upper second (2:1)       Lower second (2:2)                    Third       Lower second (2:2)
+  panel mark: 52 (Lower second (2:2)), median 52%; models agree: no
+  - models place the essay in different bands
+  - overall marks spread by 17% (> 10%)
+  - flagged for review by: mistral-small3.2:latest, gpt-oss:20b, qwen3.8:27b, muse-glimmer:30b
+
+Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
+  mistral-small3.2:latest vs gpt-oss:20b: n=1  mean diff +14  MAE 14  exact band 0%  QWK n/a (needs 2+ essays)
+  mistral-small3.2:latest vs qwen3.8:27b: n=1  mean diff +17  MAE 17  exact band 0%  QWK n/a (needs 2+ essays)
+  mistral-small3.2:latest vs muse-glimmer:30b: n=1  mean diff +13  MAE 13  exact band 0%  QWK n/a (needs 2+ essays)
+  gpt-oss:20b vs qwen3.8:27b: n=1  mean diff +3  MAE 3  exact band 0%  QWK n/a (needs 2+ essays)
+  gpt-oss:20b vs muse-glimmer:30b: n=1  mean diff -1  MAE 1  exact band 100%  QWK n/a (needs 2+ essays)
+  qwen3.8:27b vs muse-glimmer:30b: n=1  mean diff -4  MAE 4  exact band 0%  QWK n/a (needs 2+ essays)
+```
+
+**Reading it.**
+
+- The three reasoning models agree closely: 49, 52 and 53, within 4 points.
+  Mistral Small 3.2, the only model without reasoning, is 13-17 points more
+  generous on every criterion, and most of all on structure and writing.
+- With four models, the panel mark is the midpoint of the middle two marks
+  (0.5185 and 0.5250 give 0.52175, so 52, a 2:2). One generous model can't
+  pull the panel mark up the way it would pull up a mean.
+- The essay is flagged because the models put it in different bands and
+  their overall marks spread by 17 points, more than `--disagreement` (10).
+  Each model also flagged it for its own reasons:
+
+  | Model | Its review flags |
+  |---|---|
+  | mistral-small3.2 | samples disagree on argument: marks [55%, 67%]; evidence: 1 evidence quote(s) not found in the essay |
+  | gpt-oss:20b | samples disagree on knowledge: marks [65%, 52%]; argument: 2 evidence quote(s) not found in the essay; samples disagree on structure: marks [65%, 47%]; model raised integrity concerns |
+  | qwen3.8:27b | borderline: 49% is within 2% below the 50% boundary; model raised integrity concerns |
+  | muse-glimmer:30b | model raised integrity concerns |
+
+  A human should moderate this essay; see
+  [moderate-flagged-essays](skills/moderate-flagged-essays/SKILL.md).
+
+**One model's explanation.** `marker show` prints the reasons from the saved
+result without calling the model again. Here is gpt-oss:20b, with three of the
+five criteria and the feedback lists shortened (`[...]`) to keep this section
+readable; everything else is exactly as printed:
+
+```
+$ python3 -m marker show results/readme-example/gpt-oss_20b --show explanation
+== critical-evaluation-of-research-papers-psychology-essay  (gpt-oss:20b)
+Score: 52 on 0-100  Lower second (2:2)  (mark 52%)
+
+[knowledge] Knowledge, understanding and relevance to the question  weight 20%
+  mark 58%  band lower_second  (samples: 65%, 52%; spread 13%)
+  Lower second – The essay demonstrates a generally accurate but uneven understanding; it offers
+  generic definitions and limited depth, drifting from the question, matching the descriptor.
+    > "The researcher is going to critique two different studies, one of them from China and the
+    second study is local relevant to Oman."
+
+[argument] Argument and critical analysis  weight 30%
+  mark 49%  band third  (samples: 52%, 46%; spread 6%)
+  Third – The essay presents a weak, underdeveloped argument that is mostly descriptive; it offers
+  isolated critiques but lacks a sustained, coherent, independent argument, fitting the descriptor.
+    > "While (Bell, 2011) failed to outline details about sampling and sample size that was drawn
+    from research population as well as type of sample used in the studies."  [NOT FOUND IN ESSAY]
+
+[...evidence, structure and writing...]
+
+Strengths:
+  - The essay covers a wide range of components relevant to research critique, such as research
+  problem, questions, objectives, significance, literature review, theoretical framework,
+  methodology, sampling, instruments, validity, reliability, data collection, data analysis,
+  findings, and ethical considerations.
+  [...]
+Improvements:
+  - Develop a concise, explicit thesis statement in the introduction that frames the overall
+  argument of the essay.
+  - Move from descriptive statements to a sustained, critical evaluation that compares the strengths
+  and weaknesses of the two papers in a coherent way.
+  [...]
+Integrity concerns (for a human to check):
+  - Inconsistent referencing style and questionable authenticity of cited works.
+  [...]
+Review flags:
+  - samples disagree on knowledge: marks [65%, 52%]
+  - argument: 2 evidence quote(s) not found in the essay
+  - samples disagree on structure: marks [65%, 47%]
+  - model raised integrity concerns
+```
+
+`[NOT FOUND IN ESSAY]` marks a quote the model presented as evidence but which
+isn't in the essay. Here it seems to be a paraphrase, so a human should check
+that criterion.
+
+**Files written.**
+
+```
+results/readme-example/
+├── comparison.csv
+├── comparison.json
+├── gpt-oss_20b/
+│   ├── audit.jsonl
+│   ├── critical-evaluation-of-research-papers-psychology-essay.json
+│   └── summary.csv
+├── mistral-small3.2_latest/   (same three files)
+├── muse-glimmer_30b/          (same three files)
+└── qwen3.8_27b/               (same three files)
+```
+
+`gpt-oss_20b/summary.csv`. The criterion columns are the exact internal
+fractions, so `0.49` means 49%:
+
+```
+id,score,score_min,score_max,mark,band,needs_review,knowledge,argument,evidence,structure,writing,word_count,flags,model,model_digest
+critical-evaluation-of-research-papers-psychology-essay,52,0,100,0.5185,Lower second (2:2),yes,0.585,0.49,0.485,0.56,0.49,3502,"samples disagree on knowledge: marks [65%, 52%]; argument: 2 evidence quote(s) not found in the essay; samples disagree on structure: marks [65%, 47%]; model raised integrity concerns",gpt-oss:20b,f38aa0c53da5f8c49d08c43a99df24ff53167fe68e24664a7777288e7656fdfe
+```
+
+`comparison.csv` has one row per essay. Marks are exact, so with the default
+float mode they can show binary floating-point tails such as
+`0.48950000000000005` (use `--numeric decimal` for exact 4-place values):
+
+```
+id,mistral-small3.2:latest mark,gpt-oss:20b mark,qwen3.8:27b mark,muse-glimmer:30b mark,mistral-small3.2:latest score,gpt-oss:20b score,qwen3.8:27b score,muse-glimmer:30b score,mistral-small3.2:latest band,gpt-oss:20b band,qwen3.8:27b band,muse-glimmer:30b band,spread,panel_median,panel_mark,panel_score,panel_band,models_agree,notes
+critical-evaluation-of-research-papers-psychology-essay,0.65925,0.5185,0.48950000000000005,0.525,66,52,49,53,Upper second (2:1),Lower second (2:2),Third,Lower second (2:2),0.16974999999999996,0.5217499999999999,0.5217499999999999,52,Lower second (2:2),no,"models place the essay in different bands; overall marks spread by 17% (> 10%); flagged for review by: mistral-small3.2:latest, gpt-oss:20b, qwen3.8:27b, muse-glimmer:30b"
+```
+
+**Provenance** from `gpt-oss_20b/<essay>.json` records everything needed to
+reproduce the result:
+
+```json
+"provenance": {
+  "marker_version": "0.1.0",
+  "prompt_version": "2.0.0",
+  "analysis_version": "6",
+  "prompt_sha256": "50d0799be3103316318ee5703ab3130c6f80bbe29bd4ff4fd2be32f5d62ff8b8",
+  "schema_sha256": "498ab0e5492342688299b78697cb42c6a67a5a99a252d87f067fdaf0b21289c2",
+  "rubric": {"name": "UK undergraduate essay (generic)", "version": "2.0.0", "sha256": "86ff69d41833d0863d45b758684cb007f8bc6ce8548128089f96e5adc23eef6c"},
+  "model": "gpt-oss:20b",
+  "model_digest": "f38aa0c53da5f8c49d08c43a99df24ff53167fe68e24664a7777288e7656fdfe",
+  "ollama_version": "0.35.1",
+  "fingerprint": "a1addedc0c5f8fbf86e722b1811e80f31a4d7c924536b5e6a94a309f7860a49d",
+  "settings": {"model": "gpt-oss:20b", "samples": 2, "seed": 42, "temperature": 0.6, "top_p": 1.0, "think": "high", "num_ctx": 32768, "max_retries": 2, "disagreement_threshold": "0.1000", "boundary_margin": "0.0200", "keep_reasoning": false, "top_k": null, "min_p": null, "repeat_penalty": null, "num_predict": null, "extra_options": {}},
+  ...
+}
+```
+
+**Time.** The whole run took 24 minutes on an Apple Silicon Mac. Each
+sample's time and generated tokens (reasoning included) are saved in the result:
+
+| Model | Sample 1 | Sample 2 | Total |
+|---|---|---|---|
+| mistral-small3.2 | 100 s, 1,206 tokens | 64 s, 1,099 tokens | 2.7 min |
+| gpt-oss:20b | 254 s, 11,050 tokens | 107 s, 6,322 tokens | 6.0 min |
+| qwen3.8:27b | 314 s, 3,587 tokens | 283 s, 3,982 tokens | 10.0 min |
+| muse-glimmer:30b | 161 s, 2,508 tokens | 153 s, 3,019 tokens | 5.2 min |
+
+Running the same command again finishes in under a second: every input is
+unchanged, so each saved result is reused and the comparison is rebuilt
+(`--force` re-marks). With the same Ollama version and model digests, a
+forced re-run should reproduce these marks exactly, because all four are GGUF
+builds and use the fixed seeds 42 and 43. Identical GGUF output for the same
+seed was verified for gpt-oss:20b and Mistral Small; MLX builds don't give it.
 
 ## Choosing what to print
 

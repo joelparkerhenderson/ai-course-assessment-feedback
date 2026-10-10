@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This project evaluates student essays and marks them with a numeric grade 0-100.
+This project evaluates student essays and marks them with a numeric grade:
+0-100 by default, or any scale such as a 0.0000-1.0000 probability. Internally,
+marks are floats from 0.0 to 1.0 by default.
 
 Original brief: *"Research how to mark student papers. I want to use ChatGPT-OSS
 because I want a local model and I want security and reproducibility."*
@@ -20,6 +22,7 @@ specification records the requirements that came out of it. Requirement ids
 | CON-3 | **Security:** no third-party runtime dependencies (Python ≥ 3.11 standard library only). |
 | CON-4 | **Reproducibility:** fixed seeds; every result records the model content digest, Ollama version, settings, and SHA-256 of the prompt, schema, rubric, brief and essay. |
 | CON-5 | Marks are **provisional**: a human marker confirms every released mark. |
+| CON-6 | **Numeric type:** marks are Python `float` by default. Exact `Decimal` is available with `--numeric decimal`. Rounding is always half up. JSON writes floats as numbers and Decimals as exact strings. |
 
 ## Inputs
 
@@ -28,7 +31,7 @@ specification records the requirements that came out of it. Requirement ids
 | IN-1 | Essays as `.txt`, `.md` or `.docx`, given as files or directories (directories skip README and hidden files). The essay id is the file name without its extension. |
 | IN-2 | HTML comments in `.md` files are provenance metadata and are not marked. |
 | IN-3 | An optional assignment brief (plain text) is marked against. |
-| IN-4 | A rubric TOML: bands that tile 0-100 exactly, and criteria with positive weights summing to 1.0 and optional per-band descriptors. Optional word limits. |
+| IN-4 | A rubric TOML: bands that tile 0.0000-1.0000 exactly, written to 4 decimal places (each band's max is 0.0001 below the next band's min), and criteria with positive weights summing to exactly 1 and optional per-band descriptors. Values are read in the numeric mode, and validation uses the exact written values. Optional word limits. |
 
 ## Model selection
 
@@ -41,14 +44,28 @@ specification records the requirements that came out of it. Requirement ids
 | MODEL-5 | `marker models` lists installed models with family, size, quantisation and build, and marks the selection. `marker check` reports each selected model as usable or not. |
 | MODEL-6 | The reasoning setting is per model: an effort level for gpt-oss, on for other thinking-capable models, and unset otherwise. The effective value is recorded in provenance. |
 
+## Scores and precision
+
+| Id | Requirement |
+|----|-------------|
+| SCORE-1 | The default internal representation of every mark (rubric bands, model answers, sample marks, medians, weighted mark) is a Python **float from 0.0 to 1.0**. |
+| SCORE-1a | `--numeric decimal` switches the internal representation to exact `Decimal` from 0.0000 to 1.0000, with exactly 4 decimal places. The mode is recorded in each result (`"numeric"`). Switching mode re-analyses stored samples without calling the model. |
+| SCORE-2 | The model answers with fractional marks 0.0-1.0 (asked for with 4 places). Its JSON is parsed in the numeric mode (`parse_float=float` or `Decimal`). In decimal mode, marks with more places are rounded half up to 4 and noted. Out-of-range marks (e.g. `65`) are rejected and retried in both modes. The prompt is identical in both modes. |
+| SCORE-2a | Band lookup is continuous: a mark belongs to the highest band whose minimum is at or below it, so floats between written bounds (e.g. 0.79995) are classified. |
+| SCORE-3 | Users choose the reporting scale with `--score-min` and `--score-max`, as exact decimals (default 0 and 100), and `--score-places` (default: inferred from the bounds as written, so `1.0000` gives 4). |
+| SCORE-4 | score = min + weighted_mark × (max − min), rounded half up to the scale's places. It is stored with its scale in each result (`score: {value, min, max, places}`). |
+| SCORE-5 | Changing the reporting scale never calls the model: saved results are re-analysed from their stored samples. `show` can display any scale on the fly. |
+| SCORE-6 | `evaluate` accepts machine and human scores on any scale (`--score-min`/`--score-max`). MAE, RMSE and bias are in that scale's units; bands use the 0-1 fraction; QWK uses whole percentage points from exact integer counts. Statistics use the numeric mode. |
+| SCORE-7 | Results saved with integer 0-100 marks (analysis version < 4) are recognised as outdated: `grade` re-marks them, and `compare` and `show` skip them with a message. |
+
 ## Marking
 
 | Id | Requirement |
 |----|-------------|
 | MARK-1 | Analytic, criterion-referenced marking: the model judges each criterion against band descriptors. |
-| MARK-2 | For each criterion the model returns, in this order: justification, verbatim evidence quotes, band, and an integer mark inside the band. If the mark falls outside the band, it is clamped into the band. |
-| MARK-3 | N independent samples (default 3) with seeds `seed + i`. The median per criterion is used. |
-| MARK-4 | The overall mark is the weighted mean of the criterion medians, **computed in code**, rounded half up to an integer 0-100, and mapped to a band. |
+| MARK-2 | For each criterion the model returns, in this order: justification, verbatim evidence quotes, band, and a decimal mark (0.0000-1.0000) inside the band. If the mark falls outside the band, it is clamped into the band. |
+| MARK-3 | N independent samples (default 3) with seeds `seed + i`. The exact median per criterion is used. |
+| MARK-4 | The overall mark is the exact weighted mean of the criterion medians, **computed in code**, rounded half up to 4 places, and mapped to a band. |
 | MARK-5 | Invalid model output is retried with deterministic derived seeds (`seed + 1000·attempt`), up to `max_retries`. |
 | MARK-6 | The essay is treated as untrusted data: delimited, unable to close its own delimiter, and the model is told never to follow instructions in it. |
 | MARK-7 | Feedback for the student (strengths, improvements) is taken from the most representative sample. |
@@ -57,8 +74,8 @@ specification records the requirements that came out of it. Requirement ids
 
 | Id | Flag raised when |
 |----|-----------------|
-| FLAG-1 | A criterion's sample marks spread by more than the threshold (default 10). |
-| FLAG-2 | The final mark is within 2 marks below a classification boundary. |
+| FLAG-1 | A criterion's sample marks spread by more than the threshold (`--disagreement`, default 0.1000). |
+| FLAG-2 | The final mark is within the margin below a classification boundary (`--boundary-margin`, default 0.0200). |
 | FLAG-3 | An evidence quote isn't found in the essay, comparing letters and digits only (case, punctuation, spacing, and Unicode dash and quote variants are ignored), with ellipses splitting the quote into fragments. |
 | FLAG-4 | The word count is outside the rubric's limits (flag only; no penalty). |
 | FLAG-5 | The essay contains injection-like text (heuristic detector, independent of the model). |
@@ -79,16 +96,16 @@ specification records the requirements that came out of it. Requirement ids
 | Id | Requirement |
 |----|-------------|
 | CMP-1 | `grade` with more than one model marks every essay with every model (one model at a time), writing to `--out/<model>/`. |
-| CMP-2 | It then compares the models: per essay, each model's overall, band and criterion marks, the spread, a panel mark (median of the models' marks, rounded half up) and whether the models agree (same band and spread ≤ threshold). |
+| CMP-2 | It then compares the models: per essay, each model's overall, band and criterion marks, the spread, a panel mark (exact median of the models' marks, rounded half up to 4 places), a panel score on the shared reporting scale, and whether the models agree (same band and spread ≤ threshold, default 0.1000). |
 | CMP-3 | Pairwise agreement for each pair of models: n, mean difference, MAE, exact band agreement, QWK (2+ essays) and per-criterion MAE. |
 | CMP-4 | The comparison is printed and saved as `comparison.csv` and `comparison.json`. `marker compare` recomputes it from existing result directories. |
-| CMP-5 | The panel mark can be validated against human marks (`evaluate --results-mark-column panel_mark`). |
+| CMP-5 | The panel score can be validated against human marks (`evaluate --results-mark-column panel_score`). |
 
 ## Output views
 
 | Id | Requirement |
 |----|-------------|
-| SHOW-1 | `--show` on `grade` and `show` selects any combination of `score` (id, mark 0-100, band), `explanation` (per-criterion justification, evidence, feedback, flags) and `thinking` (the model's reasoning trace); `all` selects every view. The default is `score`. |
+| SHOW-1 | `--show` on `grade` and `show` selects any combination of `score` (id, score on the reporting scale, band), `explanation` (per-criterion justification, evidence, feedback, flags) and `thinking` (the model's reasoning trace); `all` selects every view. The default is `score`. |
 | SHOW-2 | Requesting `thinking` during `grade` stores the reasoning trace. A cached result without one is re-marked. |
 | SHOW-3 | `marker show` prints the views from saved results without calling a model. |
 

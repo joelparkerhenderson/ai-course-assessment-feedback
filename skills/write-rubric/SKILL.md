@@ -1,6 +1,6 @@
 ---
 name: write-rubric
-description: Create or convert a marking scheme into a valid marker rubric TOML (bands covering 0-100, weighted criteria with per-band descriptors). Use when the user supplies module marking criteria, asks for a rubric for a new assignment, or wants to change weights or descriptors.
+description: Create or convert a marking scheme into a valid marker rubric TOML (bands tiling 0.0000-1.0000 to 4 decimal places, weighted criteria with per-band descriptors). Use when the user supplies module marking criteria, asks for a rubric for a new assignment, or wants to change weights or descriptors.
 ---
 
 # Write a rubric
@@ -18,17 +18,17 @@ level = "Undergraduate year 2"
 min_words = 1800            # 0 = no check; out-of-range essays are flagged, never penalised
 max_words = 2200
 
-[[bands]]                   # must tile 0-100 exactly: no gaps, no overlaps
+[[bands]]                   # must tile 0.0000-1.0000 exactly: no gaps, no overlaps
 id = "first"                # snake_case; the model answers with these ids
 label = "First"
-min = 70
-max = 100
+min = 0.7000                # marks are decimals with 4 places (70% = 0.7000)
+max = 1.0000                # the band below must then end at 0.6999
 descriptor = "..."
 
 [[criteria]]
 id = "argument"             # snake_case JSON key
 name = "Argument and critical analysis"
-weight = 0.30               # weights must sum to 1.0
+weight = 0.30               # exact decimals; weights must sum to exactly 1
 description = "What this criterion assesses."
 [criteria.descriptors]      # optional per band; keys must be band ids
 first = "..."
@@ -36,7 +36,9 @@ first = "..."
 
 ## Converting a department's scheme
 
-1. Take the bands and boundaries exactly as the department publishes them.
+1. Take the bands and boundaries exactly as the department publishes them,
+   written as 4-place decimals: a 70% boundary is `min = 0.7000`, and the band
+   below ends at `max = 0.6999`.
    Keep extra bands (e.g. 80-89, 90-100) if the scheme has them; they help
    the model use the whole scale.
 2. One criterion for each assessed dimension. Take the weights from the scheme.

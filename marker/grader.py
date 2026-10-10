@@ -8,7 +8,9 @@ This module is the core of the marker. For one essay it:
 3. Validates every answer (:func:`parse_response`) and retries an invalid one with a
    *derived* seed (``seed + 1000 * attempt``), so retries are reproducible too.
 4. Aggregates criterion marks with the **median** across samples, then computes the
-   weighted overall mark **in code**. The model never does arithmetic.
+   weighted overall mark **in code**. The model never does arithmetic. Marks are
+   fractions from 0.0 to 1.0: Python floats by default, or exact 4-place
+   :class:`~decimal.Decimal` in ``decimal`` mode (see :mod:`marker.scale`).
 5. Raises review flags for things a human examiner should look at: sample
    disagreement, borderline marks, quotes that aren't in the essay, word limits,
    possible prompt injection, and integrity concerns raised by the model.
@@ -23,12 +25,12 @@ from __future__ import annotations
 import json
 import platform
 import re
-import statistics
 import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Protocol
 
 from . import __version__
@@ -36,6 +38,7 @@ from .essay import Essay
 from .ollama import OllamaError
 from .prompt import PROMPT_VERSION, build_messages, response_schema, sha256_of
 from .rubric import Rubric
+from .scale import DEFAULT_SCALE, Num, Scale, fmt_mark, get_numeric, median, normalise_mark, num, parse_float, zero
 
 
 class ChatClient(Protocol):
@@ -77,9 +80,11 @@ class Settings:
             and the model's reasoning.
         max_retries: Extra attempts allowed when the model's answer is invalid.
         disagreement_threshold: Flag a criterion whose sample marks spread
-            (max - min) by more than this.
-        boundary_margin: Flag a final mark this many marks or fewer *below* a
-            classification boundary (e.g. 68-69 below 70).
+            (max - min) by more than this fraction (default 0.1, i.e. 10 points).
+            Stored as an exact Decimal (it's configuration) and converted to the
+            numeric mode where it is used.
+        boundary_margin: Flag a final mark within this fraction *below* a
+            classification boundary (default 0.0200: 0.6800-0.6999 is borderline for 0.7000).
         keep_reasoning: Store the model's reasoning trace in each sample. It is
             useful for auditing but makes result files much larger.
     """
@@ -92,8 +97,8 @@ class Settings:
     think: str | bool | None = "high"
     num_ctx: int = 32768
     max_retries: int = 2
-    disagreement_threshold: int = 10
-    boundary_margin: int = 2
+    disagreement_threshold: Decimal = Decimal("0.1000")
+    boundary_margin: Decimal = Decimal("0.0200")
     keep_reasoning: bool = False
 
     def options_for(self, seed: int) -> dict[str, Any]:
@@ -118,7 +123,7 @@ INJECTION_PATTERNS: list[str] = [
     r"ignore (all |any )?(the |your )?(previous|prior|above|earlier) (instructions|prompts?|rules)",
     r"disregard (the |your )?(rubric|instructions|marking)",
     r"(you are|act as) (now )?(a|an|the) (marker|grader|examiner|assistant|ai|language model)",
-    r"(give|award|assign|mark) (this|the|my) (essay|paper|work|assignment) (a |an )?(mark|grade|score)? ?(of )?\d{2,3}",
+    r"(give|award|assign|mark) (this|the|my) (essay|paper|work|assignment) (a |an )?(mark|grade|score)? ?(of )?(\d{2,3}|[01]?\.\d+)",
     # Chat-template control tokens and role labels, including the gpt-oss "harmony" tokens.
     r"\b(system prompt|developer message|assistant:|<\|im_start\|>|<\|start\|>|<\|channel\|>)",
     r"(note|message|instruction)s? (to|for) (the )?(ai|llm|language model|grader|marker|chatgpt|gpt)",
@@ -194,6 +199,9 @@ def quote_in_essay(quote: str, normalised_essay: str) -> bool:
 def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[str]]:
     """Parse and validate one model answer.
 
+    Marks are returned in the current numeric mode: plain floats 0.0-1.0 (the
+    default), or Decimals rounded half up to 4 places (``decimal`` mode).
+
     Ollama's ``format`` parameter constrains the output to the JSON schema, but
     the answer is still checked here: the schema can't express "mark inside the
     chosen band", and constrained decoding is a convenience, not a guarantee.
@@ -215,20 +223,21 @@ def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[s
 
     Raises:
         InvalidResponse: The content isn't JSON, a criterion is missing, or a
-            mark isn't an integer from 0 to 100.
+            mark isn't a number from 0.0000 to 1.0000.
     """
     text = content.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     try:
-        data = json.loads(text)
+        # Numbers are parsed in the numeric mode; in decimal mode 0.6450 never passes through a float.
+        data = json.loads(text, parse_float=parse_float())
     except json.JSONDecodeError as e:
         # Some models wrap the JSON in prose even with a schema; try the outermost {...}.
         start, end = text.find("{"), text.rfind("}")
         try:
             if start == -1 or end <= start:
                 raise e
-            data = json.loads(text[start : end + 1])
+            data = json.loads(text[start : end + 1], parse_float=parse_float())
         except json.JSONDecodeError:
             raise InvalidResponse(f"not valid JSON: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("criteria"), dict):
@@ -242,12 +251,21 @@ def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[s
         if not isinstance(item, dict):
             raise InvalidResponse(f"missing criterion {c.id!r}")
 
-        # Accept 65.0 as 65, but reject 65.5, booleans (bool is a subclass of int) and strings.
-        mark = item.get("mark")
-        if isinstance(mark, float) and mark.is_integer():
-            mark = int(mark)
-        if not isinstance(mark, int) or isinstance(mark, bool) or not 0 <= mark <= 100:
-            raise InvalidResponse(f"criterion {c.id!r}: mark must be an integer 0-100, got {mark!r}")
+        # Marks are fractions 0.0-1.0. Accept JSON numbers (float, Decimal or int) and numeric
+        # strings; reject booleans (bool is a subclass of int) and anything out of range, such as a
+        # percentage like 65 given out of habit.
+        raw = item.get("mark")
+        try:
+            if isinstance(raw, bool) or not isinstance(raw, (float, Decimal, int, str)):
+                raise ValueError
+            mark = num(raw)
+        except ValueError:
+            raise InvalidResponse(f"criterion {c.id!r}: mark must be a number 0.0000-1.0000, got {raw!r}") from None
+        if not 0 <= mark <= 1:
+            raise InvalidResponse(f"criterion {c.id!r}: mark must be between 0.0000 and 1.0000, got {raw!r}")
+        if mark != normalise_mark(mark):  # only possible in decimal mode
+            notes.append(f"{c.id}: mark {raw} rounded to 4 decimal places")
+        mark = normalise_mark(mark)
 
         band = bands.get(str(item.get("band", "")))
         if band is None:
@@ -281,15 +299,6 @@ def parse_response(content: str, rubric: Rubric) -> tuple[dict[str, Any], list[s
         "integrity_concerns": str_list("integrity_concerns"),
     }
     return parsed, notes
-
-
-def round_half_up(x: float) -> int:
-    """Round a non-negative mark to the nearest integer, with .5 rounding up.
-
-    Python's built-in :func:`round` uses banker's rounding (``round(64.5) == 64``),
-    which is not what students or exam boards expect.
-    """
-    return int(x + 0.5)
 
 
 # --- Sampling ---------------------------------------------------------------------
@@ -362,7 +371,22 @@ def sample_once(
 #: Version of the deterministic analysis rules (aggregation, quote matching, flags).
 #: Bump it when they change, so that saved results are re-analysed from their stored samples.
 #: Version 2: quote matching ignores punctuation, spacing and Unicode dash variants.
-ANALYSIS_VERSION = "2"
+#: Version 3: exact Decimal arithmetic; ``score`` on a configurable scale.
+#: Version 4: internal marks are 0.0000-1.0000 Decimals with 4 places.
+#: Version 5: numeric modes; float 0.0-1.0 by default, Decimal optional; continuous band lookup.
+ANALYSIS_VERSION = "5"
+
+#: Oldest analysis version whose results use the current mark representation
+#: (0.0000-1.0000 decimals). Older results stored integer 0-100 marks and must be re-marked.
+MIN_COMPATIBLE_ANALYSIS = 4
+
+
+def is_compatible(result: dict[str, Any]) -> bool:
+    """True if a saved result uses the current 0.0000-1.0000 mark representation."""
+    try:
+        return int(result["provenance"].get("analysis_version", "0")) >= MIN_COMPATIBLE_ANALYSIS
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def grade_essay(
@@ -375,8 +399,12 @@ def grade_essay(
     model_digest: str = "",
     ollama_version: str = "",
     progress: Callable[[str], None] | None = None,
+    scale: Scale = DEFAULT_SCALE,
 ) -> dict[str, Any]:
-    """Mark one essay and return the full, JSON-serialisable result.
+    """Mark one essay and return the full result.
+
+    The result is JSON-serialisable with :func:`marker.scale.dumps`, which
+    writes Decimal values (``decimal`` mode) as exact strings; floats are JSON numbers.
 
     Args:
         client: Chat client used to query the model.
@@ -387,12 +415,18 @@ def grade_essay(
         model_digest: Content digest of the model weights, for provenance.
         ollama_version: Ollama server version, for provenance.
         progress: Optional callback that receives one progress message per sample.
+        scale: Reporting scale for ``score`` (default: 0-100 integers).
 
     Returns:
         A dict with these keys:
 
-        * ``mark``: final integer mark from 0 to 100.
+        * ``mark``: the final internal mark 0.0-1.0, used for bands: the weighted
+          mark as a float, or rounded half up to 4 places in ``decimal`` mode.
         * ``weighted_mark``: the unrounded weighted mean.
+        * ``score``: ``{"value", "min", "max", "places"}``: the weighted mark
+          mapped onto ``scale`` and rounded half up. With the default scale
+          this is the familiar 0-100 integer mark.
+        * ``numeric``: the numeric mode used (``"float"`` or ``"decimal"``).
         * ``band``: the band ``id`` and ``label`` for the final mark.
         * ``needs_review`` and ``flags``: whether, and why, a human should check it.
         * ``criteria``: per criterion, the median mark, band, every sample's
@@ -417,7 +451,7 @@ def grade_essay(
 
     return {
         "essay": {"id": essay.id, "path": essay.path, "word_count": essay.word_count, "sha256": essay.sha256},
-        **analyse(samples, settings, rubric, essay),
+        **analyse(samples, settings, rubric, essay, scale),
         "samples": samples,
         "provenance": {
             "marker_version": __version__,
@@ -439,7 +473,9 @@ def grade_essay(
     }
 
 
-def analyse(samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, essay: Essay) -> dict[str, Any]:
+def analyse(
+    samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, essay: Essay, scale: Scale = DEFAULT_SCALE
+) -> dict[str, Any]:
     """Turn validated samples into marks, feedback and review flags. This step is deterministic and makes no model calls.
 
     It is kept separate from sampling so that when these rules change
@@ -447,49 +483,56 @@ def analyse(samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, e
     stored samples without querying the model again (see :func:`reanalyse`).
 
     Returns:
-        The keys ``mark``, ``weighted_mark``, ``band``, ``needs_review``,
+        The keys ``mark``, ``weighted_mark``, ``score``, ``band``, ``needs_review``,
         ``flags``, ``criteria``, ``feedback`` and ``integrity_concerns``, as
         described in :func:`grade_essay`.
     """
+    def m(sample: dict[str, Any], cid: str) -> Num:
+        """A sample's mark for one criterion, in the current numeric mode (saved results may hold strings)."""
+        return normalise_mark(sample["criteria"][cid]["mark"])
+
     normalised = _normalise(essay.text)
     criteria_out: dict[str, dict[str, Any]] = {}
     flags: list[str] = []
     for c in rubric.criteria:
-        marks = [s["criteria"][c.id]["mark"] for s in samples]
-        # The median can be x.5 with an even sample count; it is kept unrounded
-        # until the final weighted mark.
-        median = statistics.median(marks)
+        marks = [m(s, c.id) for s in samples]
+        # The median can fall between two marks with an even sample count; it is
+        # kept unrounded until the final weighted mark.
+        med = median(marks)
         # Feedback comes from the sample closest to the median, so the written
         # justification matches the mark awarded.
-        rep = min(samples, key=lambda s: abs(s["criteria"][c.id]["mark"] - median))["criteria"][c.id]
+        rep = min(samples, key=lambda s: abs(m(s, c.id) - med))["criteria"][c.id]
         unverified = [q for s in samples for q in s["criteria"][c.id]["evidence"] if not quote_in_essay(q, normalised)]
         spread = max(marks) - min(marks)
         criteria_out[c.id] = {
             "name": c.name,
             "weight": c.weight,
-            "mark": median,
-            "band": rubric.band_for(median).id,
+            "mark": med,
+            "band": rubric.band_for(med).id,
             "sample_marks": marks,
             "spread": spread,
             "justification": rep["justification"],
             "evidence": rep["evidence"],
             "unverified_evidence": unverified,
         }
-        if spread > settings.disagreement_threshold:
-            flags.append(f"samples disagree on {c.id}: marks {marks}")
+        if spread > num(settings.disagreement_threshold):
+            flags.append(f"samples disagree on {c.id}: marks [{', '.join(fmt_mark(x) for x in marks)}]")
         if unverified:
             flags.append(f"{c.id}: {len(unverified)} evidence quote(s) not found in the essay")
 
-    # The overall mark is computed here, never by the model.
-    weighted = sum(criteria_out[c.id]["mark"] * c.weight for c in rubric.criteria)
-    final = round_half_up(weighted)
+    # The overall mark is computed here, never by the model, in the numeric mode's arithmetic.
+    weighted = sum((criteria_out[c.id]["mark"] * num(c.weight) for c in rubric.criteria), zero())
+    final = normalise_mark(weighted)
     band = rubric.band_for(final)
 
     # Borderline review, as in UK exam boards: marks just below a classification
     # boundary get a second look.
     for boundary in rubric.boundaries:
-        if boundary - settings.boundary_margin <= final < boundary:
-            flags.append(f"borderline: {final} is within {settings.boundary_margin} of the {boundary} boundary")
+        if num(boundary) - num(settings.boundary_margin) <= final < num(boundary):
+            flags.append(
+                f"borderline: {fmt_mark(final)} is within {fmt_mark(settings.boundary_margin)} "
+                f"of the {fmt_mark(boundary)} boundary"
+            )
     if essay.word_count < rubric.min_words:
         flags.append(f"word count {essay.word_count} is below the minimum {rubric.min_words}")
     if rubric.max_words and essay.word_count > rubric.max_words:
@@ -505,12 +548,15 @@ def analyse(samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, e
 
     # Overall feedback comes from the sample whose own weighted mark is closest to the final one.
     rep_sample = min(
-        samples, key=lambda s: abs(sum(s["criteria"][c.id]["mark"] * c.weight for c in rubric.criteria) - weighted)
+        samples,
+        key=lambda s: abs(sum((m(s, c.id) * num(c.weight) for c in rubric.criteria), zero()) - weighted),
     )
 
     return {
         "mark": final,
-        "weighted_mark": round(weighted, 2),
+        "weighted_mark": weighted,
+        "score": {"value": scale.from_fraction(weighted), **scale.as_dict()},
+        "numeric": get_numeric(),
         "band": {"id": band.id, "label": band.label},
         "needs_review": bool(flags),
         "flags": flags,
@@ -520,10 +566,13 @@ def analyse(samples: list[dict[str, Any]], settings: Settings, rubric: Rubric, e
     }
 
 
-def reanalyse(result: dict[str, Any], settings: Settings, rubric: Rubric, essay: Essay) -> dict[str, Any]:
+def reanalyse(
+    result: dict[str, Any], settings: Settings, rubric: Rubric, essay: Essay, scale: Scale = DEFAULT_SCALE
+) -> dict[str, Any]:
     """Recompute a saved result's marks and flags from its stored samples with the current analysis rules.
 
-    The model isn't called. The samples and the original provenance are kept;
+    It is also used to re-report a result on a different ``scale``. The model
+    isn't called. The samples and the original provenance are kept;
     ``analysis_version``, ``marker_version`` and ``reanalysed_at`` are updated.
     Use this only when the fingerprint matches, which means the samples came
     from the same inputs.
@@ -536,7 +585,7 @@ def reanalyse(result: dict[str, Any], settings: Settings, rubric: Rubric, essay:
     }
     return {
         "essay": result["essay"],
-        **analyse(result["samples"], settings, rubric, essay),
+        **analyse(result["samples"], settings, rubric, essay, scale),
         "samples": result["samples"],
         "provenance": provenance,
     }

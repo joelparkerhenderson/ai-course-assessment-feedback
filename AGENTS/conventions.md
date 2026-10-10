@@ -14,5 +14,19 @@
   messages and exit code 2.
 - Output: progress and errors go to **stderr**; machine-readable results
   (`id<TAB>mark<TAB>band`) go to **stdout**.
-- Rounding: always `round_half_up`, never the built-in `round` (banker's rounding).
+- **Marks follow the numeric mode** (`marker/scale.py`): Python `float` 0.0-1.0
+  by default, or `Decimal` 0.0000-1.0000 with 4 places (`--numeric decimal`).
+  The mode is process-wide; `cli.main` sets it first. Rules:
+  - convert every mark with `scale.num()` or `scale.normalise_mark()` (both
+    accept str, int, float or Decimal, including values saved in JSON);
+  - start sums with `scale.zero()`, use `scale.median()`, `scale.sqrt()` and
+    `scale.quantize()`, and never mix `float` and `Decimal` in arithmetic;
+  - parse with `parse_float=scale.parse_float()` (TOML and model JSON);
+  - keep configuration exact (`Decimal` from `scale.dec()`) and convert it with
+    `num()` where it's used;
+  - format marks shown to people with `scale.fmt_mark()` (4 places), and exact
+    output with `scale.text()`; write JSON with `scale.dumps()`;
+  - test both modes: Decimal assertions inside `numeric("decimal")`.
+- Rounding: always half up (`scale.quantize`, `scale.round_half_up`), never the
+  built-in `round` (banker's rounding).
 - Line length: 120.

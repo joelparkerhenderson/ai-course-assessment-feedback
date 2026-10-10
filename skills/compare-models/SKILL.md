@@ -34,7 +34,7 @@ description: Mark the same essays with two or more local models (e.g. gpt-oss 20
 
 - Model agreement is **not** accuracy. Two models can agree and both be
   wrong. To say which model is *better*, use `calibrate-marker` against
-  human marks, including the panel: `--results comparison.csv --results-mark-column panel_mark`.
+  human marks, including the panel: `--results comparison.csv --results-mark-column panel_score`.
 - Don't compare runs that used different essays, briefs, rubrics or settings.
   Check `provenance` in the result JSON if unsure.
 - Report each model's tag **and** digest.

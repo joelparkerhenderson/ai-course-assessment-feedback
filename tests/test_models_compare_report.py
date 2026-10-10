@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
@@ -15,8 +16,11 @@ from marker.compare import compare_runs, discover_result_dirs, format_report, la
 from marker.grader import Settings, grade_essay
 from marker.models import family_key, model_info, select_models, slug, think_for
 from marker.report import parse_show, render
+from marker.scale import FRACTION_SCALE, Scale, dumps
 
-from .test_marker import RUBRIC, FakeClient, answer, load_essay, write_essay
+from marker.scale import numeric
+
+from .test_marker import RUBRIC, RUBRIC_D, FakeClient, answer, load_essay, write_essay
 
 TAGS = [
     {"name": "gpt-oss:20b", "digest": "d20", "details": {"format": "gguf", "parameter_size": "20.9B", "quantization_level": "MXFP4"}},
@@ -76,15 +80,18 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertEqual(slug("library/gpt-oss:20b"), "library_gpt-oss_20b")
 
 
-def make_result(essay, model: str, marks: dict[str, int], reasoning: str | None = None) -> dict:
+def make_result(essay, model: str, marks: dict[str, int], reasoning: str | None = None, rubric=RUBRIC_D) -> dict:
     """Produce a real result via grade_essay with a fake client (one sample), optionally keeping reasoning."""
     client = FakeClient([answer(marks)], thinking=reasoning or "")
     settings = Settings(model=model, samples=1, keep_reasoning=reasoning is not None)
-    return grade_essay(client, settings, RUBRIC, essay, model_digest=f"digest-{model}")
+    return grade_essay(client, settings, rubric, essay, model_digest=f"digest-{model}")
 
 
 class CompareAndReportTests(unittest.TestCase):
+    """Exact comparisons, in decimal mode."""
+
     def setUp(self):
+        self.enterContext(numeric("decimal"))
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.e1 = load_essay(write_essay(root, "e1.txt"))
@@ -102,25 +109,43 @@ class CompareAndReportTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_compare(self):
-        report = compare_runs(self.runs, RUBRIC, threshold=10)
+        report = compare_runs(self.runs, RUBRIC_D, threshold=Decimal("0.1000"))
         e1, e2 = report["essays"]
-        self.assertEqual(e1["marks"], {"model-a": 71, "model-b": 62, "model-c": 55})
-        self.assertEqual(e1["panel_mark"], 62)
-        self.assertEqual(e1["spread"], 16)
+        # model-a: 0.72*0.2 + 0.70*0.3 + 0.70*0.2 + 0.72*0.15 + 0.72*0.15 = 0.7100
+        self.assertEqual(e1["marks"], {"model-a": Decimal("0.71"), "model-b": Decimal("0.621"), "model-c": Decimal("0.55")})
+        self.assertEqual(e1["panel_mark"], Decimal("0.6210"))
+        self.assertEqual(e1["panel_score"], Decimal("62"))  # all results share the default 0-100 scale
+        self.assertEqual(e1["spread"], Decimal("0.16"))
         self.assertFalse(e1["models_agree"])
         self.assertFalse(e2["models_agree"])  # model-c did not mark e2
         self.assertIn("not marked by: model-c", e2["notes"])
         ab = report["pairs"][0]
         self.assertEqual((ab["a"], ab["b"], ab["n"]), ("model-a", "model-b", 2))
-        self.assertAlmostEqual(ab["mean_diff"], 4.5)
+        self.assertEqual(ab["mean_diff"], Decimal("0.0445"))  # exact: ((0.71 - 0.621) + 0) / 2
         self.assertEqual(ab["exact_band_agreement"], 0.5)
-        text = format_report(report, RUBRIC)
+        text = format_report(report, RUBRIC_D)
         self.assertIn("panel mark: 62", text)
         self.assertIn("model-a vs model-b", text)
+        self.assertIn("marks shown on 0-100", text)
+        exported = json.loads(dumps(report))
+        self.assertEqual(exported["essays"][0]["panel_mark"], "0.6210")  # exact decimal text, never a float
 
     def test_compare_needs_two(self):
         with self.assertRaises(ValueError):
-            compare_runs({"model-a": self.runs["model-a"]}, RUBRIC)
+            compare_runs({"model-a": self.runs["model-a"]}, RUBRIC_D)
+
+    def test_compare_float_mode(self):
+        with numeric("float"):
+            runs = {
+                m: {"e1": make_result(self.e1, m, marks, rubric=RUBRIC)}
+                for m, marks in (("model-a", dict(knowledge=72, argument=70, evidence=70, structure=72, writing=72)),
+                                 ("model-b", dict(knowledge=62, argument=63, evidence=61, structure=62, writing=62)))
+            }
+            report = compare_runs(runs, RUBRIC)
+            e1 = report["essays"][0]
+            self.assertIsInstance(e1["panel_mark"], float)
+            self.assertAlmostEqual(e1["panel_mark"], (0.71 + 0.621) / 2)
+            self.assertIn("panel mark: 67", format_report(report, RUBRIC))
 
     def test_parse_show(self):
         self.assertEqual(parse_show(None), {"score"})
@@ -132,6 +157,8 @@ class CompareAndReportTests(unittest.TestCase):
     def test_render_views(self):
         r = self.runs["model-a"]["e1"]
         self.assertEqual(render(r, {"score"}).split("\t")[:2], ["e1", "71"])
+        self.assertEqual(render(r, {"score"}, scale=FRACTION_SCALE).split("\t")[:2], ["e1", "0.7100"])
+        self.assertEqual(render(r, {"score"}, scale=Scale.parse("0", "20", 1)).split("\t")[:2], ["e1", "14.2"])
         expl = render(r, {"explanation"})
         self.assertIn("[argument]", expl)
         self.assertIn("Justification for argument.", expl)
@@ -189,20 +216,45 @@ class CliMultiModelTests(unittest.TestCase):
                                            "--samples", "1", "--out", str(out), "--show", "score,thinking", "--think", "medium"]), 0)
             self.assertEqual(fake.calls, [])
 
-            # Results made with older analysis rules are re-analysed from stored samples, with no model calls.
+            # A different score scale is re-analysed from stored samples, with no model calls.
             path = out / "gpt-oss_20b" / "paper.json"
-            stale = json.loads(path.read_text())
-            stale["provenance"]["analysis_version"] = "1"
-            stale["flags"], stale["needs_review"] = ["stale flag"], True
-            path.write_text(json.dumps(stale))
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(["grade", str(essay), "--model", "gpt-oss:20b,muse-glimmer:30b-mlx",
-                                           "--samples", "1", "--out", str(out), "--show", "score,thinking", "--think", "medium"]), 0)
+                                           "--samples", "1", "--out", str(out), "--think", "medium",
+                                           "--score-min", "0.0000", "--score-max", "1.0000"]), 0)
             self.assertEqual(fake.calls, [])
+            self.assertIn("paper\t0.6500\tUpper second (2:1)\tgpt-oss:20b", stdout.getvalue())
             fresh = json.loads(path.read_text())
-            self.assertNotIn("stale flag", fresh["flags"])
+            # Default float mode: the value is a JSON number; the scale bounds are exact strings.
+            self.assertEqual(fresh["score"], {"value": 0.65, "min": "0.0000", "max": "1.0000", "places": 4})
+            self.assertEqual(fresh["numeric"], "float")
             self.assertIn("reanalysed_at", fresh["provenance"])
             self.assertIn('"event": "reanalysed"', (out / "gpt-oss_20b" / "audit.jsonl").read_text())
+            summary = (out / "gpt-oss_20b" / "summary.csv").read_text()
+            self.assertIn("paper,0.6500,0.0000,1.0000,0.65,", summary)
+
+            # Switching to --numeric decimal also re-analyses stored samples, with no model calls.
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(["grade", str(essay), "--model", "gpt-oss:20b,muse-glimmer:30b-mlx",
+                                           "--samples", "1", "--out", str(out), "--think", "medium", "--numeric", "decimal",
+                                           "--score-min", "0.0000", "--score-max", "1.0000"]), 0)
+            self.assertEqual(fake.calls, [])
+            fresh = json.loads(path.read_text())
+            self.assertEqual(fresh["numeric"], "decimal")
+            self.assertEqual(fresh["score"]["value"], "0.6500")  # exact string
+            self.assertEqual(fresh["mark"], "0.6500")
+            self.assertIn("paper,0.6500,0.0000,1.0000,0.6500,", (out / "gpt-oss_20b" / "summary.csv").read_text())
+
+            # Results from older marker versions (integer 0-100 marks) are re-marked, not misread.
+            stale = json.loads(path.read_text())
+            stale["provenance"]["analysis_version"] = "3"
+            path.write_text(json.dumps(stale))
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(["grade", str(essay), "--model", "gpt-oss:20b", "--samples", "1",
+                                           "--out", str(out / "gpt-oss_20b"), "--think", "medium"]), 0)
+            self.assertEqual(fake.calls, [("gpt-oss:20b", "medium")])
+            fake.calls.clear()
 
             # compare and show work on the saved results.
             self.assertEqual(len(discover_result_dirs([str(out)])), 2)

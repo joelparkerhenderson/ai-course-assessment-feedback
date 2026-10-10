@@ -17,6 +17,11 @@ every `Settings` field, `fingerprint`, Python version, platform, and a UTC times
 - The prompt is a pure function of the rubric, brief and essay: no dates, no
   randomness, no dict-order dependence (`sha256_of` sorts keys).
 - Aggregation is deterministic: median, weighted sum, then round half up.
+  The default float mode is deterministic in Python on IEEE 754 hardware.
+  `--numeric decimal` is exact and byte-identical across platforms and
+  languages. The mode is recorded in each result (`"numeric"`).
+- The numeric mode must never change the prompt: band bounds are always
+  formatted to 4 places (`fmt_mark`). A test enforces this.
 - `compute_fingerprint` covers every input that affects marks. If you add a
   setting that affects marks, it must be included (it is automatically, if
   it is a `Settings` field). If it affects only storage, exclude it as

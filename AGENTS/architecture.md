@@ -29,7 +29,8 @@ brief.txt   ─┐
 
 | Module | Responsibility | Must not |
 |--------|----------------|----------|
-| `rubric.py` | Parse and validate TOML rubrics; map marks to bands | know about the model |
+| `scale.py` | Exact Decimal marks (0.0000-1.0000, 4 places), reporting scales, rounding, median, JSON encoding | use floats |
+| `rubric.py` | Parse and validate TOML rubrics (Decimal bands and weights); map marks to bands | know about the model |
 | `essay.py` | Read .txt/.md/.docx; normalise; hash; count words | alter wording |
 | `prompt.py` | System and user messages; JSON schema; canonical hashing | contain timestamps or randomness |
 | `ollama.py` | HTTP to Ollama; loopback enforcement; model digest | do retries or parsing |

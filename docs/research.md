@@ -34,6 +34,13 @@ habitually under-use the top and bottom of the scale ("scale compression").
 Guidance from UK assessment bodies and institutional marking schemes encourages
 markers to use the full range when the work warrants it.
 
+**Decision:** marks are held internally as fractions from 0.0 to 1.0, so
+70% is 0.7. That is the same information as a percentage, but finer when
+needed, and directly usable as a probability. The default type is Python
+`float`; `--numeric decimal` uses exact 4-place `Decimal` (0.0000-1.0000) for
+results that must be free of binary floating-point error. The final score is reported on 0-100
+by default, matching UK practice, or on any scale the user chooses.
+
 **Decision:** the default rubric uses seven bands with explicit descriptors,
 including 80–100 and 0–29, so the model has language for exceptional and very
 weak work. Bands are data in a TOML file so a department's own scheme can be

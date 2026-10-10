@@ -2,9 +2,10 @@
 
 Three views can be combined (``--show score,explanation,thinking``):
 
-* ``score``: the final 0-100 mark, its band, and whether review is needed.
-  This is one tab-separated line, ``id<TAB>mark<TAB>band[<TAB>model]``, so it can be
-  piped into other tools.
+* ``score``: the final score on the reporting scale (default 0-100; e.g.
+  0.0000-1.0000 with ``--score-min``/``--score-max``), its band, and whether
+  review is needed. This is one tab-separated line, ``id<TAB>score<TAB>band[<TAB>model]``,
+  so it can be piped into other tools.
 * ``explanation``: for each criterion, the mark, band, sample marks,
   justification and evidence quotes (unverified quotes are marked), followed by
   the feedback (strengths and improvements), integrity concerns and review flags.
@@ -18,6 +19,8 @@ from __future__ import annotations
 
 import textwrap
 from typing import Any
+
+from .scale import MARK_QUANTUM, Scale, dec, fmt_mark, text
 
 #: The views that can be requested, in display order.
 SHOW_CHOICES = ("score", "explanation", "thinking")
@@ -40,9 +43,17 @@ def parse_show(values: list[str] | None) -> set[str]:
     return items or {"score"}
 
 
-def score_line(result: dict[str, Any], *, with_model: bool = False) -> str:
-    """Return the one-line, tab-separated score: ``id, mark, band[, model]``, plus ``[REVIEW]`` if flagged."""
-    parts = [result["essay"]["id"], str(result["mark"]), result["band"]["label"]]
+def score_of(result: dict[str, Any], scale: Scale | None = None) -> str:
+    """The result's score as exact text: the stored score, or ``weighted_mark`` re-mapped onto ``scale`` if given."""
+    if scale is not None:
+        return scale.format(scale.from_fraction(result["weighted_mark"]))
+    stored = result["score"]
+    return Scale(dec(stored["min"]), dec(stored["max"]), int(stored["places"])).format(stored["value"])
+
+
+def score_line(result: dict[str, Any], *, with_model: bool = False, scale: Scale | None = None) -> str:
+    """Return the one-line, tab-separated score: ``id, score, band[, model]``, plus ``[REVIEW]`` if flagged."""
+    parts = [result["essay"]["id"], score_of(result, scale), result["band"]["label"]]
     if with_model:
         parts.append(result["provenance"]["model"])
     line = "\t".join(parts)
@@ -57,17 +68,25 @@ def _wrap(text: str, indent: str, width: int = 100) -> list[str]:
     return out
 
 
-def explanation_text(result: dict[str, Any]) -> str:
-    """Return the per-criterion explanation, feedback, integrity concerns and review flags."""
+def explanation_text(result: dict[str, Any], scale: Scale | None = None) -> str:
+    """Return the per-criterion explanation, feedback, integrity concerns and review flags.
+
+    Criterion marks are shown as internal 0.0-1.0 fractions to 4 places. The
+    overall score is shown on the reporting scale.
+    """
+    shown = scale or Scale.from_dict(result["score"])
     lines = [
         f"== {result['essay']['id']}  ({result['provenance']['model']})",
-        f"Mark: {result['mark']}/100  {result['band']['label']}  (weighted {result['weighted_mark']})",
+        f"Score: {score_of(result, scale)} on {shown.label()}  {result['band']['label']}  "
+        f"(mark {_mark(result['mark'])}, weighted {_mark(result['weighted_mark'], exact=True)})",
         "",
     ]
     for cid, c in result["criteria"].items():
-        samples = ", ".join(str(m) for m in c["sample_marks"])
-        lines.append(f"[{cid}] {c['name']}  weight {c['weight']:.0%}")
-        lines.append(f"  mark {_num(c['mark'])}  band {c['band']}  (samples: {samples}; spread {c['spread']})")
+        samples = ", ".join(_mark(m) for m in c["sample_marks"])
+        lines.append(f"[{cid}] {c['name']}  weight {dec(c['weight']):.0%}")
+        lines.append(
+            f"  mark {_mark(c['mark'], exact=True)}  band {c['band']}  (samples: {samples}; spread {_mark(c['spread'])})"
+        )
         lines.extend(_wrap(c["justification"], "  "))
         unverified = set(c.get("unverified_evidence", []))
         for q in c["evidence"]:
@@ -114,21 +133,30 @@ def has_reasoning(result: dict[str, Any]) -> bool:
     return bool(samples) and all("reasoning" in s for s in samples)
 
 
-def render(result: dict[str, Any], show: set[str], *, with_model: bool = False) -> str:
+def render(result: dict[str, Any], show: set[str], *, with_model: bool = False, scale: Scale | None = None) -> str:
     """Render the requested views of one result, in the order thinking, explanation, score.
 
-    The score comes last so it stays visible at the end of long output.
+    The score comes last so it stays visible at the end of long output. With
+    ``scale``, the score is re-mapped onto that scale (exactly, from the stored
+    weighted mark) instead of the scale it was saved with.
     """
     blocks: list[str] = []
     if "thinking" in show:
         blocks.append(thinking_text(result))
     if "explanation" in show:
-        blocks.append(explanation_text(result))
+        blocks.append(explanation_text(result, scale))
     if "score" in show:
-        blocks.append(score_line(result, with_model=with_model))
+        blocks.append(score_line(result, with_model=with_model, scale=scale))
     return "\n\n".join(blocks)
 
 
-def _num(x: float | int) -> str:
-    """Format a mark: ``62`` stays ``62``, a median of ``62.5`` stays ``62.5``."""
-    return str(int(x)) if float(x).is_integer() else f"{x:.1f}"
+def _mark(x: Any, *, exact: bool = False) -> str:
+    """Format an internal mark to 4 places (``0.6200``).
+
+    With ``exact``, a value with more than 4 places, such as a median ``0.62125``
+    or a float sum ``0.44550000000000006``, is shown in full.
+    """
+    d = dec(x)
+    if exact and d != d.quantize(MARK_QUANTUM):
+        return text(x)
+    return fmt_mark(x)

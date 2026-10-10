@@ -1,6 +1,6 @@
 ---
 name: mark-essays
-description: Mark student essays 0-100 against a rubric with local Ollama models (default gpt-oss) using `marker grade`, choosing models by tag, family, size or MLX build, and showing the score, explanation and/or model thinking. Use when the user asks to mark, grade or score essays, papers or assignments in this repo.
+description: Mark student essays (0-100 by default, or any decimal scale such as a 0.0000-1.0000 probability) against a rubric with local Ollama models (default gpt-oss) using `marker grade`, choosing models by tag, family, size or MLX build, and showing the score, explanation and/or model thinking. Use when the user asks to mark, grade or score essays, papers or assignments in this repo.
 ---
 
 # Mark essays
@@ -34,6 +34,8 @@ reasoning behind the method.
    ```sh
    python3 -m marker grade essays/ --brief brief.txt --out results/<batch> [--model gpt-oss:120b]
    ```
+   If the user wants a different score scale, add e.g. `--score-min 0.0000 --score-max 1.0000`
+   (probability, 4 places) or `--score-min 0 --score-max 20 --score-places 1`.
    Add `--show explanation,score` if the user wants the reasons, or
    `--show thinking` for the model's reasoning trace (`--show all` for everything).
    Keep the defaults (`--samples 3 --seed 42 --temperature 0.6 --think high`)

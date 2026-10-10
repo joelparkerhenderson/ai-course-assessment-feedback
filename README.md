@@ -17,6 +17,9 @@ student, and review flags that tell a human which essays need a closer look.
   "Muse Glimmer") or size, prefer Mac-optimised MLX builds, and compare models
   side by side with a panel mark.
 - **Transparent**: print the score, the per-criterion explanation and/or the model's thinking.
+- **Fractional marks**: marks are held internally as fractions from 0.0 to
+  1.0, as Python `float` by default or as exact `Decimal` with `--numeric decimal`.
+  Scores can be reported on any scale: 0-100 (the default), 0.0000-1.0000, 0-20, and so on.
 - **Grounded in marking practice**: UK classification bands, analytic criteria,
   median of independent samples (like double marking), borderline review, and
   calibration against human marks with QWK. See [`docs/research.md`](docs/research.md).
@@ -37,6 +40,7 @@ student, and review flags that tell a human which essays need a closer look.
 - [Choosing models](#choosing-models)
 - [Comparing models](#comparing-models)
 - [Choosing what to print](#choosing-what-to-print)
+- [Score scale and numeric precision](#score-scale-and-numeric-precision)
 - [Rubrics](#rubrics)
 - [Output](#output)
 - [Review flags](#review-flags)
@@ -60,12 +64,15 @@ student, and review flags that tell a human which essays need a closer look.
    be untrusted data.
 2. **Judge**: gpt-oss reasons (`think` = `high`) and answers in a JSON schema
    that Ollama enforces. For each criterion it gives a **justification**,
-   **evidence quotes**, a **band**, and an integer **mark** inside that band.
+   **evidence quotes**, a **band**, and a **mark** inside that band: a fraction
+   from 0.0 to 1.0, asked for with 4 places (e.g. `0.6450`).
 3. **Repeat**: this is done for 3 independent samples by default, with seeds
    `42, 43, 44`. An invalid answer is retried with a derived seed.
 4. **Aggregate in code**: the median mark per criterion, then the weighted
-   mean, rounded half up to an integer 0-100 and mapped to a band. The model
-   never does arithmetic.
+   mean, mapped to a band (floats by default; exact Decimals rounded to 4
+   places with `--numeric decimal`). The model
+   never does arithmetic. The final **score** is that weighted mark mapped onto
+   your reporting scale (by default 0-100 integers).
 5. **Flag**: the essay is flagged if samples disagree, the mark is borderline,
    quotes can't be found in the essay, the word count is outside limits,
    injection-like text is present, or the model raised integrity concerns.
@@ -186,7 +193,10 @@ is the file name without its extension.
 | `--temperature` | `0.6` | Sampling temperature (non-zero so samples are independent) |
 | `--think` | `high` | Reasoning effort for gpt-oss: `low`, `medium` or `high`. Other thinking models have reasoning switched on |
 | `--num-ctx` | `32768` | Context window (tokens) |
-| `--disagreement` | `10` | Flag if marks spread by more than this, across samples (or across models in a comparison) |
+| `--numeric` | `float` | Numeric type for marks: `float` or `decimal` (exact, 4 places). See [numeric precision](#score-scale-and-numeric-precision) |
+| `--disagreement` | `0.1000` | Flag if marks spread by more than this fraction (10 points), across samples or across models in a comparison |
+| `--boundary-margin` | `0.0200` | Flag a final mark this close below a band boundary (e.g. 0.6800-0.6999 below a First) |
+| `--score-min`, `--score-max`, `--score-places` | `0`, `100`, inferred | Reporting scale (see [Score scale](#score-scale-and-numeric-precision)) |
 | `--keep-reasoning` | off | Store the model's reasoning trace (large). Implied by `--show thinking` |
 | `--force` | off | Remark even if the inputs are unchanged |
 | `--host`, `--allow-remote` | | As above |
@@ -194,9 +204,10 @@ is the file name without its extension.
 Re-running is safe and cheap: an essay whose inputs (text, prompt, rubric,
 brief, model digest and settings) are unchanged is **skipped**. An
 interrupted batch can simply be restarted. If only marker's own analysis rules
-have changed since then (quote matching, flags, aggregation; tracked as
-`analysis_version`), the saved result is **re-analysed from its stored samples**
-in under a second, with no model calls.
+(quote matching, flags, aggregation; tracked as `analysis_version`), the
+**score scale** or the **numeric mode** have changed since then, the saved result is **re-analysed
+from its stored samples** in under a second, with no model calls. Results saved
+by marker versions that used integer 0-100 marks are re-marked automatically.
 
 **Exit codes:** `0` all essays marked or skipped · `1` some essays failed · `2` usage or configuration error.
 
@@ -215,7 +226,9 @@ prints the full report.
 ### `marker show RESULT...`
 
 Prints views of existing result files or directories, e.g.
-`python3 -m marker show results/example --show explanation`.
+`python3 -m marker show results/example --show explanation`. With
+`--score-min`/`--score-max`, scores are re-mapped exactly onto that scale for
+display; without them, each result's saved scale is used.
 
 ### `marker evaluate`
 
@@ -224,9 +237,10 @@ Compares machine marks with human marks. See [Calibration](#calibration-against-
 | Option | Default | Meaning |
 |---|---|---|
 | `--results` | `results/summary.csv` | `summary.csv` from `grade`, or `comparison.csv` from a comparison |
-| `--results-mark-column` | `mark` | Mark column in `--results` (use `panel_mark` for `comparison.csv`) |
-| `--human` | (required) | CSV of human marks |
+| `--results-mark-column` | `score` | Score column in `--results` (`panel_score` for `comparison.csv`) |
+| `--human` | (required) | CSV of human marks, on the same scale |
 | `--id-column` / `--mark-column` | `id` / `mark` | Column names in the human CSV |
+| `--score-min`, `--score-max`, `--score-places` | `0`, `100` | The scale both CSVs use, e.g. `--score-min 0.0000 --score-max 1.0000` |
 | `--rubric` | bundled | Used to map marks to bands |
 | `--json` | off | Print the full report, including per-essay differences |
 
@@ -300,6 +314,8 @@ python3 -m marker grade assets/example-papers/ \
 ```
 
 The same thing on one line: `--model muse-glimmer:30b-mlx,qwen3.8:27b-mlx,gpt-oss:20b`.
+Add `--score-min 0.0000 --score-max 1.0000` to report every score, and the
+comparison table, as a probability with 4 decimal places.
 Check first that all three load: `python3 -m marker check --model muse-glimmer:30b-mlx,qwen3.8:27b-mlx,gpt-oss:20b`.
 With an odd number of models, the panel mark is the middle model's mark. The
 two MLX models trigger the [reproducibility warning](#choosing-models) above.
@@ -309,6 +325,8 @@ loaded once. Results go to `results/paper-compare/<model>/`. A comparison is
 then printed and saved to `results/paper-compare/comparison.{csv,json}`:
 
 ```
+Model comparison: 2 models, 1 essay(s); marks shown on 0-100
+
 Essay: paper
   criterion   gpt-oss:20b  muse-glimmer:30b-mlx  spread
   knowledge            62                    55       7
@@ -316,21 +334,22 @@ Essay: paper
   ...
   OVERALL              60                    53       7
   band       Upper second (2:1)  Lower second (2:2)
-  panel mark: 57 (Lower second (2:2)), median of 56.5; models agree: no
+  panel mark: 57 (Lower second (2:2)), median 0.5650; models agree: no
   - models place the essay in different bands
 
-Pairwise agreement (a vs b; mean diff = a - b)
-  gpt-oss:20b vs muse-glimmer:30b-mlx: n=1  mean diff +7.0  MAE 7.0  exact band 0%  QWK n/a (needs 2+ essays)
+Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
+  gpt-oss:20b vs muse-glimmer:30b-mlx: n=1  mean diff +7  MAE 7  exact band 0%  QWK n/a (needs 2+ essays)
 ```
 
 *(Illustrative numbers.)*
 
-- **Panel mark**: the median of the models' overall marks. Using several
-  different judges reduces the effect of any one model's biases, much like
-  double marking. To validate it against human marks:
-  `marker evaluate --results results/paper-compare/comparison.csv --results-mark-column panel_mark --human human.csv`.
+- **Panel mark**: the exact median of the models' overall marks
+  (0.0000-1.0000), shown on the reporting scale and saved as `panel_score`.
+  Using several different judges reduces the effect of any one model's
+  biases, much like double marking. To validate it against human marks:
+  `marker evaluate --results results/paper-compare/comparison.csv --results-mark-column panel_score --human human.csv`.
 - **Models agree** when every model gives the same band and the overall
-  spread is within `--disagreement` marks.
+  spread is within `--disagreement` (default 0.1000, i.e. 10 points).
 - **Pairwise agreement** over several essays: mean difference (which model
   is more generous), MAE, exact band agreement, QWK, and per-criterion MAE (in the JSON).
 
@@ -357,21 +376,72 @@ python3 -m marker show results/paper.json --show thinking           # from a sav
 The reasoning trace is the model's working, not a polished explanation. It
 can be long, and it may contain false starts. Use `explanation` for feedback.
 
+## Score scale and numeric precision
+
+**Internally, every mark is a fraction from 0.0 to 1.0.** This applies to
+rubric bands, the model's answers, sample marks, medians, the weighted mark
+and the review thresholds. A UK First starts at 0.7. `--numeric` chooses the
+Python type, on `grade`, `compare`, `show`, `evaluate` and `rubric`:
+
+| `--numeric` | Type | Behaviour |
+|---|---|---|
+| `float` (default) | Python `float`, 0.0-1.0 | Marks are used as the model gives them. Arithmetic is ordinary binary floating point, so `0.1 + 0.2` is `0.30000000000000004` and a weighted mark may be `0.44550000000000006`. In JSON, marks are numbers |
+| `decimal` | Python `Decimal`, 0.0000-1.0000 | Exact: model marks and the final mark are rounded half up to 4 places, and `0.1 + 0.2` is exactly `0.3`. Model JSON is parsed with `parse_float=Decimal`, so no float is ever involved. In JSON, marks are exact strings (`"0.4455"`) |
+
+In both modes:
+
+- **Rounding:** reported scores are rounded **half up**, using each float's
+  shortest decimal form, so `0.62125` gives `0.6213` and 64.5 gives 65. This
+  differs from Python's `round()`, which rounds halves to even.
+- **Bands are continuous:** a mark belongs to the highest band whose minimum
+  is at or below it, so a float such as 0.79995 is still a First.
+- **Configuration stays exact:** values you type (score bounds, thresholds)
+  are read as exact decimals and converted to the mode only when used.
+- **Same prompt and fingerprint:** switching mode only **re-analyses** saved
+  results from their stored samples. The model isn't run again.
+
+Out-of-range marks, such as `65` given out of habit, are rejected and the
+model is retried.
+
+The final **score** is the weighted mark mapped onto your reporting scale,
+then rounded half up:
+
+```
+score = score_min + weighted_mark × (score_max − score_min)
+```
+
+| Options | Example score for weighted mark 0.62125 |
+|---|---|
+| (default) `--score-min 0 --score-max 100` | `62` |
+| `--score-min 0.0000 --score-max 1.0000` (probability, 4 places) | `0.6213` |
+| `--score-min 0.00 --score-max 1.00` | `0.62` |
+| `--score-min 0 --score-max 20 --score-places 1` | `12.4` |
+
+Decimal places are inferred from how you write the bounds (`1.0000` gives 4),
+or set with `--score-places` (0-6). Changing the scale never re-runs the
+model: saved results are re-analysed from their stored samples.
+
+Each result records its mode in `"numeric"`. Values that aren't marks, such
+as the sampling `--temperature`, timings and model sizes, are always ordinary numbers.
+
 ## Rubrics
 
-A rubric is a TOML file with **bands** that tile 0-100 and weighted
-**criteria** that have per-band descriptors. The bundled
+A rubric is a TOML file with **bands** that tile 0.0000-1.0000 exactly (written
+to 4 decimal places, so one file works in both numeric modes) and weighted
+**criteria** that have per-band descriptors. TOML numbers are read as floats,
+or as exact `Decimal`s with `--numeric decimal`. Validation always uses the
+exact values as written. The bundled
 [`rubrics/uk-undergraduate-essay.toml`](rubrics/uk-undergraduate-essay.toml) uses:
 
-| Band | Marks |
-|---|---|
-| Exceptional first | 80-100 |
-| First | 70-79 |
-| Upper second (2:1) | 60-69 |
-| Lower second (2:2) | 50-59 |
-| Third | 40-49 |
-| Marginal fail | 30-39 |
-| Fail | 0-29 |
+| Band | Marks (internal) | As a percentage |
+|---|---|---|
+| Exceptional first | 0.8000-1.0000 | 80-100 |
+| First | 0.7000-0.7999 | 70-79 |
+| Upper second (2:1) | 0.6000-0.6999 | 60-69 |
+| Lower second (2:2) | 0.5000-0.5999 | 50-59 |
+| Third | 0.4000-0.4999 | 40-49 |
+| Marginal fail | 0.3000-0.3999 | 30-39 |
+| Fail | 0.0000-0.2999 | 0-29 |
 
 | Criterion | Weight |
 |---|---|
@@ -392,29 +462,31 @@ max_words = 2500       # outside limits -> flagged, never penalised
 [[bands]]
 id = "pass"
 label = "Pass"
-min = 40
-max = 100
+min = 0.4000
+max = 1.0000
 descriptor = "Meets the learning outcomes."
 
 [[bands]]
 id = "fail"
 label = "Fail"
-min = 0
-max = 39
+min = 0.0000
+max = 0.3999           # exactly 0.0001 below the next band's min
 descriptor = "Does not meet the learning outcomes."
 
 [[criteria]]
 id = "argument"
 name = "Argument"
-weight = 1.0
+weight = 1
 description = "Clarity and quality of reasoning."
 [criteria.descriptors]
 pass = "A clear, supported argument."
 fail = "No coherent argument."
 ```
 
-Validation rules: bands cover 0-100 exactly with unique ids; criterion
-weights are positive and sum to 1.0; descriptors refer only to existing bands.
+Validation rules: band bounds have at most 4 decimal places, and the bands
+cover 0.0000-1.0000 exactly (each band's `max` is 0.0001 below the `min` of the
+band above), with unique ids. Criterion weights are positive and sum to
+*exactly* 1. Descriptors refer only to existing bands.
 For authoring guidance, see [`skills/write-rubric`](skills/write-rubric/SKILL.md).
 
 ## Output
@@ -424,12 +496,12 @@ For each batch directory (`--out`, or `--out/<model>/` when several models are u
 | File | Contents |
 |---|---|
 | `<essay-id>.json` | Full result (below). Written atomically. |
-| `summary.csv` | `id, mark, band, needs_review, <criterion marks…>, word_count, flags, model, model_digest`. Rebuilt on every run. |
-| `audit.jsonl` | One line per event (`marked` or `reanalysed`): essay id and hash, mark, needs_review, time, model, digest, fingerprint. Append-only. |
+| `summary.csv` | `id, score, score_min, score_max, mark, band, needs_review, <criterion marks…>, word_count, flags, model, model_digest`. `mark` and the criterion marks are 0.0000-1.0000. Rebuilt on every run. |
+| `audit.jsonl` | One line per event (`marked` or `reanalysed`): essay id and hash, mark, score, needs_review, time, model, digest, fingerprint. Append-only. |
 
 With several models, `--out` also contains `comparison.csv` (one row per
-essay: each model's mark and band, spread, panel median, panel mark and band,
-whether the models agree, notes) and `comparison.json` (the full report,
+essay: each model's mark, score and band, spread, panel median, panel mark,
+panel score and band, whether the models agree, notes) and `comparison.json` (the full report,
 including pairwise statistics).
 
 Result JSON (abridged):
@@ -437,15 +509,17 @@ Result JSON (abridged):
 ```jsonc
 {
   "essay": {"id": "…", "path": "…", "word_count": 3412, "sha256": "…"},
-  "mark": 58,                       // final integer mark
-  "weighted_mark": 57.9,
+  "numeric": "float",               // or "decimal"
+  "mark": 0.581,                    // internal mark 0.0-1.0 (decimal mode: exact string "0.5810")
+  "weighted_mark": 0.581,           // unrounded
+  "score": {"value": 58.0, "min": "0", "max": "100", "places": 0},   // on the reporting scale
   "band": {"id": "lower_second", "label": "Lower second (2:2)"},
   "needs_review": true,
-  "flags": ["borderline: 58 is within 2 of the 60 boundary"],
+  "flags": ["borderline: 0.5810 is within 0.0200 of the 0.6000 boundary"],
   "criteria": {
     "argument": {
-      "mark": 55, "band": "lower_second", "weight": 0.3,
-      "sample_marks": [55, 52, 57], "spread": 5,
+      "mark": 0.55, "band": "lower_second", "weight": 0.3,
+      "sample_marks": [0.55, 0.52, 0.57], "spread": 0.05,
       "justification": "…", "evidence": ["exact quote…"], "unverified_evidence": []
     }
     // … one entry per criterion
@@ -454,7 +528,7 @@ Result JSON (abridged):
   "integrity_concerns": [],
   "samples": [ /* every raw sample: seed, marks, justification, raw JSON, timing, tokens, reasoning if kept */ ],
   "provenance": {
-    "marker_version": "0.1.0", "prompt_version": "1.0.0",
+    "marker_version": "0.1.0", "prompt_version": "2.0.0", "analysis_version": "5",
     "prompt_sha256": "…", "schema_sha256": "…",
     "rubric": {"name": "…", "version": "1.0.0", "sha256": "…"},
     "brief_sha256": "…", "model": "gpt-oss:20b", "model_digest": "f2b8…",
@@ -470,8 +544,8 @@ Result JSON (abridged):
 
 | Flag | Why it matters |
 |---|---|
-| `samples disagree on <criterion>` | The model's independent judgements varied by more than `--disagreement` marks, so it is less certain |
-| `borderline: N is within 2 of the B boundary` | UK exam-board practice: marks just below a classification boundary get a second look |
+| `samples disagree on <criterion>` | The model's independent judgements varied by more than `--disagreement` (0.1000), so it is less certain |
+| `borderline: M is within 0.0200 of the B boundary` | UK exam-board practice: marks just below a classification boundary get a second look (`--boundary-margin`) |
 | `<criterion>: k evidence quote(s) not found in the essay` | The model "quoted" text that isn't there (e.g. a paraphrase), so its justification is suspect. Matching ignores case, punctuation, spacing and dash/quote variants, so typography alone never triggers it |
 | `word count … below the minimum / exceeds the limit` | Rubric word limits (flagged only, never penalised automatically) |
 | `possible prompt injection in essay: …` | The essay contains text that seems aimed at an AI marker |
@@ -492,9 +566,9 @@ python3 -m marker evaluate --results results/calibration/summary.csv --human hum
 
 ```
 essays compared:         40
-MAE:                     4.10 marks
-RMSE:                    5.32 marks
-mean bias (machine-human): +1.20 marks
+MAE:                     4 (on 0-100)
+RMSE:                    5 (on 0-100)
+mean bias (machine-human): +1 (on 0-100)
 Pearson r:               0.812
 QWK (marks):             0.795
 QWK (bands):             0.741
@@ -505,7 +579,8 @@ adjacent band agreement: 98%
 *(Illustrative numbers, not a measured result.)* **QWK** (quadratic weighted
 kappa) is the standard agreement metric in automated essay scoring. Compare it
 with the agreement between your own human markers. Re-calibrate whenever the
-model, rubric, brief or prompt changes. See
+model, rubric, brief or prompt changes. If your human marks use another scale,
+say so, e.g. `--score-min 0.0000 --score-max 1.0000` for probabilities. See
 [`skills/calibrate-marker`](skills/calibrate-marker/SKILL.md).
 
 ## Reproducibility
@@ -517,7 +592,10 @@ model, rubric, brief or prompt changes. See
   schema, rubric file and brief.
 - **Fingerprint**: one hash over all of the above plus settings. Equal
   fingerprints mean equal inputs.
-- **Deterministic aggregation**: median, weighted mean, round half up.
+- **Deterministic aggregation**: median, weighted mean, and round half up.
+  For results that must be byte-identical across machines and languages, use
+  `--numeric decimal`, which is exact. Floats are deterministic in Python on
+  IEEE 754 hardware, but not exact.
 
 **Limits:** bit-identical model output is expected only with the same
 weights, Ollama build and hardware, and only for GGUF builds: MLX builds

@@ -7,10 +7,13 @@ Background and citations: `docs/research.md`. Summary of what the code must keep
 2. **Reasons before numbers.** The schema orders `justification` and `evidence` before `mark`.
 3. **Several independent samples, median per criterion** (default 3). This is
    the machine analogue of double marking.
-4. **Weighted overall mark computed in code**, rounded half up, mapped to a band.
+4. **Weighted overall mark computed in code** (float 0.0-1.0 by default; exact
+   Decimal rounded half up to 4 places with `--numeric decimal`), mapped to a
+   band by its minimum, then mapped onto the reporting scale (`score`,
+   default 0-100).
 5. **Review flags** (any flag means `needs_review = true`):
-   - sample spread > `disagreement_threshold` (default 10) on any criterion;
-   - final mark within `boundary_margin` (default 2) below a classification boundary;
+   - sample spread > `disagreement_threshold` (default 0.1000) on any criterion;
+   - final mark within `boundary_margin` (default 0.0200) below a classification boundary;
    - evidence quotes not found in the essay;
    - word count outside the rubric's limits (flag only, never a penalty);
    - injection-like text in the essay;

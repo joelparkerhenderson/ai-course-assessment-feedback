@@ -22,9 +22,21 @@ with each one, then prints and saves a comparison::
 
 ``marker compare results/cmp`` re-runs the comparison on existing results.
 
+Numeric mode (``grade``, ``compare``, ``show``, ``evaluate``, ``rubric``). Marks
+are held internally as fractions 0.0-1.0::
+
+    (default)            --numeric float     # Python floats
+                         --numeric decimal   # exact Decimal, 4 places (0.0000-1.0000)
+
+Choosing the score scale (``grade``, ``show``, ``evaluate``). The final score is reported on::
+
+    (default)                                  # 0-100 integers, e.g. 62
+    --score-min 0.0000 --score-max 1.0000      # probability with 4 places, e.g. 0.6213
+    --score-min 0 --score-max 20 --score-places 1   # e.g. 12.4
+
 Choosing what to print (``grade`` and ``show``)::
 
-    --show score                     # id<TAB>mark<TAB>band (default)
+    --show score                     # id<TAB>score<TAB>band (default)
     --show explanation               # per-criterion justification, evidence, feedback, flags
     --show thinking                  # the model's reasoning trace (stored automatically)
     --show score,explanation,thinking   (or --show all)
@@ -49,18 +61,41 @@ import dataclasses
 import json
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .compare import compare_runs, discover_result_dirs, format_report, label_runs, load_results, write_comparison
+from .compare import (
+    DEFAULT_THRESHOLD,
+    compare_runs,
+    discover_result_dirs,
+    format_report,
+    label_runs,
+    load_results,
+    outdated_results,
+    write_comparison,
+)
 from .essay import Essay, expand_paths, load_essay
 from .evaluate import evaluate, read_marks
-from .grader import ANALYSIS_VERSION, Settings, compute_fingerprint, grade_essay, reanalyse
+from .grader import ANALYSIS_VERSION, Settings, compute_fingerprint, grade_essay, is_compatible, reanalyse
 from .models import MLX_POLICIES, ModelInfo, is_apple_silicon, model_info, resolve_mlx_policy, select_models, slug, think_for
 from .ollama import DEFAULT_HOST, OllamaClient, OllamaError
 from .report import SHOW_CHOICES, has_reasoning, parse_show, render
 from .rubric import Rubric, RubricError, load_rubric
+from .scale import (
+    DEFAULT_NUMERIC,
+    DEFAULT_SCALE,
+    MAX_PLACES,
+    NUMERIC_MODES,
+    Scale,
+    dec,
+    dumps,
+    get_numeric,
+    normalise_mark,
+    set_numeric,
+    text,
+)
 
 #: The bundled generic UK undergraduate rubric, used when ``--rubric`` is not given.
 DEFAULT_RUBRIC = Path(__file__).resolve().parent.parent / "rubrics" / "uk-undergraduate-essay.toml"
@@ -74,6 +109,11 @@ def eprint(*args: object) -> None:
 def split_csv(values: list[str] | None) -> list[str]:
     """Flatten repeatable, comma-separated option values: ``["a,b", "c"]`` gives ``["a", "b", "c"]``."""
     return [v.strip() for raw in (values or []) for v in raw.split(",") if v.strip()]
+
+
+def make_scale(args: argparse.Namespace) -> Scale:
+    """Build the reporting scale from ``--score-min``, ``--score-max`` and ``--score-places``."""
+    return Scale.parse(args.score_min, args.score_max, args.score_places)
 
 
 def make_client(args: argparse.Namespace) -> OllamaClient:
@@ -155,14 +195,23 @@ def cmd_rubric(args: argparse.Namespace) -> int:
 
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON to a temporary file, then rename it into place, so readers never see a partial file."""
+    """Write JSON to a temporary file, then rename it into place, so readers never see a partial file.
+
+    Decimal values (``decimal`` mode) are written as exact strings; floats are
+    JSON numbers (see :func:`marker.scale.dumps`).
+    """
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.write_text(dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
 
 def write_summary(out_dir: Path, rubric: Rubric) -> Path:
     """Rebuild ``summary.csv`` from every result JSON in ``out_dir``.
+
+    Columns: ``score`` on the reporting scale (with ``score_min``/``score_max``),
+    ``mark`` as the internal 0.0-1.0 fraction, the band, the review flag,
+    each criterion's median fraction, and provenance. Marks are written as
+    exact text: a float's shortest form, or a Decimal without exponent.
 
     The summary is rebuilt from scratch rather than appended to, so it always
     matches the per-essay files, including results kept from earlier runs.
@@ -175,15 +224,22 @@ def write_summary(out_dir: Path, rubric: Rubric) -> Path:
     crit_ids = [c.id for c in rubric.criteria]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["id", "mark", "band", "needs_review", *crit_ids, "word_count", "flags", "model", "model_digest"])
+        w.writerow(
+            ["id", "score", "score_min", "score_max", "mark", "band", "needs_review", *crit_ids,
+             "word_count", "flags", "model", "model_digest"]
+        )
         for r in load_results(out_dir).values():
+            sc = Scale.from_dict(r["score"])
             w.writerow(
                 [
                     r["essay"]["id"],
-                    r["mark"],
+                    sc.format(r["score"]["value"]),
+                    sc.format(sc.min),
+                    sc.format(sc.max),
+                    text(normalise_mark(r["mark"])),
                     r["band"]["label"],
                     "yes" if r["needs_review"] else "no",
-                    *[r["criteria"].get(c, {}).get("mark", "") for c in crit_ids],
+                    *[text(normalise_mark(r["criteria"][c]["mark"])) if c in r["criteria"] else "" for c in crit_ids],
                     r["essay"]["word_count"],
                     "; ".join(r["flags"]),
                     r["provenance"]["model"],
@@ -205,10 +261,11 @@ def append_audit(out_dir: Path, essay: Essay, result: dict[str, Any], event: str
             "essay_id": essay.id,
             "essay_sha256": essay.sha256,
             "mark": result["mark"],
+            "score": result["score"]["value"],
             "needs_review": result["needs_review"],
             **{k: result["provenance"][k] for k in ("marked_at", "model", "model_digest", "fingerprint")},
         }
-        audit.write(json.dumps(record) + "\n")
+        audit.write(dumps(record) + "\n")
 
 
 def grade_batch(
@@ -223,14 +280,18 @@ def grade_batch(
     show: set[str],
     with_model: bool,
     ollama_version: str,
+    scale: Scale = DEFAULT_SCALE,
 ) -> int:
     """Mark every essay with one model, writing results to ``out_dir`` and printing the requested views.
 
     An existing result is reused when its input fingerprint matches, unless
     ``force`` is set or the thinking view was requested and the stored result
     has no reasoning trace. A reused result made with older analysis rules
-    (:data:`marker.grader.ANALYSIS_VERSION`) is re-analysed from its stored
+    (:data:`marker.grader.ANALYSIS_VERSION`), saved on a different score scale,
+    or computed in a different numeric mode, is re-analysed from its stored
     samples, which makes no model calls.
+    Results from marker versions with integer 0-100 marks have a different
+    fingerprint (the prompt changed), so they are re-marked.
 
     Returns:
         The number of essays that failed.
@@ -246,17 +307,28 @@ def grade_batch(
         if out_path.exists() and not force:
             try:
                 existing = json.loads(out_path.read_text(encoding="utf-8"))
-                reusable = existing["provenance"]["fingerprint"] == fp and (
-                    "thinking" not in show or has_reasoning(existing)
+                reusable = (
+                    is_compatible(existing)
+                    and existing["provenance"]["fingerprint"] == fp
+                    and ("thinking" not in show or has_reasoning(existing))
                 )
             except (KeyError, json.JSONDecodeError):
                 reusable = False
             if reusable:
-                if existing["provenance"].get("analysis_version") != ANALYSIS_VERSION:
-                    existing = reanalyse(existing, settings, rubric, essay)
+                stale = existing["provenance"].get("analysis_version") != ANALYSIS_VERSION
+                rescaled = Scale.from_dict(existing["score"]) != scale
+                # Results from before numeric modes existed were computed with Decimals.
+                remoded = existing.get("numeric", "decimal") != get_numeric()
+                if stale or rescaled or remoded:
+                    existing = reanalyse(existing, settings, rubric, essay, scale)
                     write_json_atomic(out_path, existing)
                     append_audit(out_dir, essay, existing, event="reanalysed")
-                    eprint(f"{essay.id}: unchanged inputs; re-analysed stored samples with analysis v{ANALYSIS_VERSION}")
+                    why = (
+                        f"analysis v{ANALYSIS_VERSION}" if stale
+                        else f"score scale {scale.label()}" if rescaled
+                        else f"numeric mode {get_numeric()}"
+                    )
+                    eprint(f"{essay.id}: unchanged inputs; re-analysed stored samples for {why} (no model calls)")
                 else:
                     eprint(f"{essay.id}: unchanged inputs, reusing existing result (use --force to remark)")
                 print(render(existing, show, with_model=with_model), flush=True)
@@ -264,7 +336,7 @@ def grade_batch(
         try:
             result = grade_essay(
                 client, settings, rubric, essay, brief,
-                model_digest=digest, ollama_version=ollama_version, progress=eprint,
+                model_digest=digest, ollama_version=ollama_version, progress=eprint, scale=scale,
             )
         except OllamaError as e:
             eprint(f"{essay.id}: FAILED with {settings.model}: {e}")
@@ -288,6 +360,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         0 if every essay was marked or reused, 1 if any failed, 2 if no essays were found.
     """
     show = parse_show(args.show)
+    scale = make_scale(args)
     rubric = load_rubric(args.rubric)
     brief = Path(args.brief).read_text(encoding="utf-8") if args.brief else None
 
@@ -316,6 +389,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         temperature=args.temperature,
         num_ctx=args.num_ctx,
         disagreement_threshold=args.disagreement,
+        boundary_margin=args.boundary_margin,
         keep_reasoning=args.keep_reasoning or "thinking" in show,
     )
 
@@ -330,7 +404,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         dirs.append(out_dir)
         failures += grade_batch(
             client, settings, rubric, brief, essays, out_dir,
-            force=args.force, show=show, with_model=multi, ollama_version=ollama_version,
+            force=args.force, show=show, with_model=multi, ollama_version=ollama_version, scale=scale,
         )
 
     if multi:
@@ -353,11 +427,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
     """``marker compare``: compare existing result directories from different models."""
     rubric = load_rubric(args.rubric)
     dirs = discover_result_dirs(args.dirs)
+    for d in dirs:
+        old = outdated_results(d)
+        if old:
+            eprint(f"warning: {d}: ignoring {len(old)} result(s) from an older marker version (re-run grade): {', '.join(old)}")
     report = compare_runs(label_runs(dirs), rubric, args.disagreement)
     out = Path(args.out) if args.out else (Path(args.dirs[0]) if len(args.dirs) == 1 else Path("."))
     csv_path, json_path = write_comparison(out, report, rubric)
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(dumps(report, indent=2, ensure_ascii=False))
     else:
         print(format_report(report, rubric))
     eprint(f"comparison saved to {csv_path} and {json_path}")
@@ -367,35 +445,47 @@ def cmd_compare(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     """``marker show``: print the requested views of existing result files (or every result in a directory)."""
     show = parse_show(args.show)
+    # Only re-map scores if the user gave a scale; otherwise show each result's saved scale.
+    rescale = args.score_min is not None or args.score_max is not None or args.score_places is not None
+    scale = Scale.parse(args.score_min or "0", args.score_max or "100", args.score_places) if rescale else None
     results: list[dict[str, Any]] = []
     for raw in args.results:
         p = Path(raw)
         if p.is_dir():
             results.extend(load_results(p).values())
+            for essay_id in outdated_results(p):
+                eprint(f"skip {essay_id}: saved by an older marker version (integer 0-100 marks); re-run grade")
         else:
-            results.append(json.loads(p.read_text(encoding="utf-8")))
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not is_compatible(data):
+                eprint(f"skip {p}: saved by an older marker version (integer 0-100 marks); re-run grade")
+                continue
+            results.append(data)
     if not results:
         eprint("no results found")
         return 2
     with_model = len({r["provenance"]["model"] for r in results}) > 1
-    print("\n\n".join(render(r, show, with_model=with_model) for r in results))
+    print("\n\n".join(render(r, show, with_model=with_model, scale=scale) for r in results))
     return 0
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """``marker evaluate``: report agreement between machine marks and a CSV of human marks."""
     rubric = load_rubric(args.rubric)
+    scale = make_scale(args)
     machine = read_marks(args.results, "id", args.results_mark_column)
     human = read_marks(args.human, args.id_column, args.mark_column)
-    report = evaluate(machine, human, rubric)
+    report = evaluate(machine, human, rubric, scale)
     if args.json:
-        print(json.dumps(report, indent=2))
+        print(dumps(report, indent=2))
         return 0
+    unit = f"(on {scale.label()})"
+    r = report["pearson_r"]
     print(f"essays compared:         {report['n']}")
-    print(f"MAE:                     {report['mae']:.2f} marks")
-    print(f"RMSE:                    {report['rmse']:.2f} marks")
-    print(f"mean bias (machine-human): {report['mean_bias']:+.2f} marks")
-    print(f"Pearson r:               {report['pearson_r']:.3f}")
+    print(f"MAE:                     {scale.format(report['mae'])} {unit}")
+    print(f"RMSE:                    {scale.format(report['rmse'])} {unit}")
+    print(f"mean bias (machine-human): {'+' if report['mean_bias'] >= 0 else ''}{scale.format(report['mean_bias'])} {unit}")
+    print(f"Pearson r:               {'n/a (no variance)' if r is None else f'{r:.3f}'}")
     print(f"QWK (marks):             {report['qwk_marks']:.3f}")
     print(f"QWK (bands):             {report['qwk_bands']:.3f}")
     print(f"exact band agreement:    {report['exact_band_agreement']:.0%}")
@@ -440,6 +530,23 @@ def build_parser() -> argparse.ArgumentParser:
         """Add the ``--rubric`` option."""
         sp.add_argument("--rubric", default=str(DEFAULT_RUBRIC), help="rubric TOML file")
 
+    def add_scale(sp: argparse.ArgumentParser, *, defaults: bool = True) -> None:
+        """Add the score-scale options. ``defaults=False`` leaves them unset (``show`` then keeps each saved scale)."""
+        g = sp.add_argument_group("score scale (marks are held internally as decimals 0.0000-1.0000)")
+        g.add_argument("--score-min", default="0" if defaults else None, metavar="DEC",
+                       help="score for 0%%, as an exact decimal (default 0)")
+        g.add_argument("--score-max", default="100" if defaults else None, metavar="DEC",
+                       help="score for 100%%, e.g. 100 or 1.0000 (default 100)")
+        g.add_argument("--score-places", type=int, default=None, metavar="N",
+                       help=f"decimal places in scores, 0-{MAX_PLACES} (default: as written in --score-min/--score-max, "
+                            "so 1.0000 gives 4)")
+
+    def add_numeric(sp: argparse.ArgumentParser) -> None:
+        """Add the ``--numeric`` option."""
+        sp.add_argument("--numeric", default=DEFAULT_NUMERIC, choices=NUMERIC_MODES,
+                        help="numeric type for marks 0.0-1.0: float (default) or decimal "
+                             "(exact Decimal, 4 places, 0.0000-1.0000)")
+
     def add_show(sp: argparse.ArgumentParser) -> None:
         """Add the ``--show`` option."""
         sp.add_argument("--show", action="append", metavar="VIEWS",
@@ -457,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("rubric", help="validate and show a rubric")
     add_rubric(sp)
+    add_numeric(sp)
     sp.set_defaults(func=cmd_rubric)
 
     sp = sub.add_parser("grade", help="mark essays (.txt, .md, .docx files or directories) with one or more models")
@@ -465,6 +573,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_models(sp)
     add_rubric(sp)
     add_show(sp)
+    add_numeric(sp)
+    add_scale(sp)
     sp.add_argument("--brief", help="assignment brief / question text file")
     sp.add_argument("--out", default="results", help="output directory; one subdirectory per model when several (default %(default)s)")
     sp.add_argument("--samples", type=int, default=3, help="independent samples per essay; median is used (default %(default)s)")
@@ -473,8 +583,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--think", default="high", choices=["low", "medium", "high"],
                     help="reasoning effort for gpt-oss; other thinking models just have reasoning switched on (default %(default)s)")
     sp.add_argument("--num-ctx", type=int, default=32768, help="context window tokens (default %(default)s)")
-    sp.add_argument("--disagreement", type=int, default=10,
-                    help="flag if marks spread more than this, across samples or across models (default %(default)s)")
+    sp.add_argument("--disagreement", type=dec, default=Decimal("0.1000"), metavar="DEC",
+                    help="flag if marks spread more than this fraction, across samples or across models "
+                         "(default %(default)s = 10 points)")
+    sp.add_argument("--boundary-margin", type=dec, default=Decimal("0.0200"), metavar="DEC",
+                    help="flag a final mark this close below a band boundary (default %(default)s)")
     sp.add_argument("--keep-reasoning", action="store_true", help="store the model's reasoning trace (implied by --show thinking)")
     sp.add_argument("--force", action="store_true", help="remark even if inputs are unchanged")
     sp.set_defaults(func=cmd_grade)
@@ -482,24 +595,32 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("compare", help="compare result directories from different models")
     sp.add_argument("dirs", nargs="+", help="result directories, or one multi-model --out directory")
     add_rubric(sp)
+    add_numeric(sp)
     sp.add_argument("--out", help="where to write comparison.csv/json (default: the single directory given, else .)")
-    sp.add_argument("--disagreement", type=int, default=10, help="models disagree if marks spread more than this")
+    sp.add_argument("--disagreement", type=dec, default=DEFAULT_THRESHOLD, metavar="DEC",
+                    help="models disagree if marks spread more than this fraction (default %(default)s)")
     sp.add_argument("--json", action="store_true", help="print the full comparison as JSON")
     sp.set_defaults(func=cmd_compare)
 
     sp = sub.add_parser("show", help="print score, explanation and/or thinking from existing results")
     sp.add_argument("results", nargs="+", help="result JSON files or result directories")
     add_show(sp)
+    add_numeric(sp)
+    add_scale(sp, defaults=False)
     sp.set_defaults(func=cmd_show)
 
     sp = sub.add_parser("evaluate", help="compare machine marks against human marks")
     sp.add_argument("--results", default="results/summary.csv", help="summary.csv or comparison.csv from marker")
-    sp.add_argument("--results-mark-column", default="mark", help="mark column in --results (use panel_mark for comparison.csv)")
+    sp.add_argument("--results-mark-column", default="score",
+                    help="score column in --results (default score; panel_score for comparison.csv; "
+                         "mark or panel_mark with --score-min 0 --score-max 1.0000)")
     sp.add_argument("--human", required=True, help="CSV of human marks")
     sp.add_argument("--id-column", default="id")
     sp.add_argument("--mark-column", default="mark")
     sp.add_argument("--json", action="store_true", help="print the full report as JSON")
     add_rubric(sp)
+    add_numeric(sp)
+    add_scale(sp)
     sp.set_defaults(func=cmd_evaluate)
     return p
 
@@ -517,6 +638,8 @@ def main(argv: list[str] | None = None) -> int:
         The process exit code.
     """
     args = build_parser().parse_args(argv)
+    # Set the numeric mode before anything (rubric, results, CSVs) is read, so every value is one type.
+    set_numeric(getattr(args, "numeric", DEFAULT_NUMERIC))
     if getattr(args, "samples", 1) < 1:
         eprint("--samples must be at least 1")
         return 2

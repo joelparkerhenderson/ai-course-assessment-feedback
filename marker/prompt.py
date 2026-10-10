@@ -9,6 +9,10 @@ Design notes, based on ``docs/research.md``:
   and ``evidence`` before ``mark``, and gpt-oss reasons before answering.
 * **No model arithmetic.** The model gives per-criterion marks only; the code
   computes the weighted total.
+* **Fractional marks.** Marks are 0.0-1.0, asked for with 4 decimal places,
+  the same scale the code uses internally (see :mod:`marker.scale`). The
+  prompt is identical in both numeric modes, so the mode never changes the
+  fingerprint.
 * **Known LLM-judge biases** (length, central tendency) are addressed with
   explicit instructions.
 * **Prompt-injection defence.** The essay is wrapped in ``<essay>`` tags,
@@ -25,9 +29,11 @@ import json
 from typing import Any
 
 from .rubric import Rubric
+from .scale import fmt_mark, json_default
 
 #: Version of the prompt wording. Recorded in provenance; bump it on every meaningful change.
-PROMPT_VERSION = "1.0.0"
+#: 2.0.0: marks are decimals 0.0000-1.0000 with 4 places (previously integers 0-100).
+PROMPT_VERSION = "2.0.0"
 
 SYSTEM_TEMPLATE = """\
 You are an experienced, fair and rigorous university examiner marking a student essay.
@@ -35,7 +41,7 @@ You mark against the published rubric below (criterion-referenced), never agains
 
 # Rubric: {rubric_name} (version {rubric_version}){level}
 
-## Marking bands (percentage marks)
+## Marking bands (marks are decimals from 0.0000 to 1.0000)
 {bands}
 
 ## Criteria
@@ -47,8 +53,8 @@ You mark against the published rubric below (criterion-referenced), never agains
    a. Find the band whose descriptor best fits the essay for that criterion.
    b. Quote 1-3 short passages copied EXACTLY, character for character, from the essay as evidence.
    c. Write a concise justification that refers to the band descriptor and the evidence.
-   d. Give an integer mark inside that band: low in the band if it only just fits, high if it nearly reaches the band above.
-3. Use the FULL 0-100 scale. Award 80+ for genuinely exceptional work and below 30 for very weak work. Do not cluster marks in the 60s by default.
+   d. Give a mark inside that band as a decimal from 0.0000 to 1.0000 with 4 decimal places (e.g. 0.6450): low in the band if it only just fits, high if it nearly reaches the band above.
+3. Use the FULL 0.0000-1.0000 scale. Award 0.8000+ for genuinely exceptional work and below 0.3000 for very weak work. Do not cluster marks in the 0.6000s by default.
 4. Do NOT reward length, vocabulary or confidence for their own sake; reward the qualities in the descriptors.
 5. Do NOT compute an overall mark; it is calculated from your criterion marks.
 6. Give brief, constructive feedback addressed to the student: strengths and specific improvements.
@@ -70,13 +76,13 @@ USER_TEMPLATE = """\
 
 def _format_bands(rubric: Rubric) -> str:
     """Render the bands as a Markdown list, highest first."""
-    return "\n".join(f"- {b.label} ({b.min}-{b.max}): {b.descriptor}" for b in rubric.bands)
+    return "\n".join(f"- {b.label} ({fmt_mark(b.min)}-{fmt_mark(b.max)}): {b.descriptor}" for b in rubric.bands)
 
 
 def _format_criteria(rubric: Rubric) -> str:
     """Render each criterion with its weight, description and per-band descriptors."""
     blocks: list[str] = []
-    labels = {b.id: f"{b.label} ({b.min}-{b.max})" for b in rubric.bands}
+    labels = {b.id: f"{b.label} ({fmt_mark(b.min)}-{fmt_mark(b.max)})" for b in rubric.bands}
     for c in rubric.criteria:
         # The backticked id is the JSON key the model must use.
         lines = [f"### `{c.id}`: {c.name} (weight {c.weight:.0%})", c.description]
@@ -133,7 +139,7 @@ def response_schema(rubric: Rubric) -> dict[str, Any]:
         "justification": {"type": "string"},
         "evidence": {"type": "array", "items": {"type": "string"}},
         "band": {"type": "string", "enum": [b.id for b in rubric.bands]},
-        "mark": {"type": "integer", "minimum": 0, "maximum": 100},
+        "mark": {"type": "number", "minimum": 0, "maximum": 1},
     }
     return {
         "type": "object",
@@ -161,7 +167,9 @@ def response_schema(rubric: Rubric) -> dict[str, Any]:
 def sha256_of(obj: Any) -> str:
     """Return the SHA-256 of a JSON-serialisable object in canonical form.
 
-    Keys are sorted and non-ASCII text is kept as UTF-8, so equal objects
-    always hash equally whatever their dict order.
+    Keys are sorted, non-ASCII text is kept as UTF-8, and Decimals are written as
+    exact strings, so equal objects always hash equally whatever their dict order.
     """
-    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(obj, sort_keys=True, ensure_ascii=False, default=json_default).encode("utf-8")
+    ).hexdigest()

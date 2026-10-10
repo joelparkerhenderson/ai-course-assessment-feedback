@@ -2,8 +2,10 @@
 
 A rubric has two parts:
 
-* **bands**: classification bands that partition the 0-100 scale (e.g. First
-  70-79, 2:1 60-69, ...), each with a general descriptor; and
+* **bands**: classification bands that partition the internal 0.0-1.0 scale
+  (e.g. First 0.7000-0.7999, 2:1 0.6000-0.6999, ...), written to 4 decimal
+  places so the same file works in both numeric modes, each with a general
+  descriptor; and
 * **criteria**: weighted dimensions of quality (e.g. argument, evidence), each
   with a descriptor per band.
 
@@ -17,8 +19,11 @@ from __future__ import annotations
 import hashlib
 import tomllib
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+from .scale import MARK_PLACES, MARK_QUANTUM, Num, dec, normalise_mark, num, parse_float
 
 
 class RubricError(ValueError):
@@ -27,23 +32,26 @@ class RubricError(ValueError):
 
 @dataclass(frozen=True)
 class Band:
-    """One classification band on the 0-100 scale.
+    """One classification band on the internal 0.0-1.0 scale.
 
     Attributes:
         id: Stable identifier the model uses in its answer, e.g. ``"upper_second"``.
         label: Human-readable name, e.g. ``"Upper second (2:1)"``.
-        min: Lowest mark in the band (inclusive).
-        max: Highest mark in the band (inclusive).
+        min: Lowest mark in the band (inclusive), e.g. ``0.7``. A float or a
+            Decimal, depending on the numeric mode when the rubric was loaded.
+        max: Highest mark in the band as written, e.g. ``0.7999``. In float mode a
+            mark between this and the next band's ``min`` (e.g. 0.79995) belongs to
+            this band; see :meth:`Rubric.band_for`.
         descriptor: General description of work in this band.
     """
 
     id: str
     label: str
-    min: int
-    max: int
+    min: Num
+    max: Num
     descriptor: str
 
-    def contains(self, mark: float) -> bool:
+    def contains(self, mark: Num) -> bool:
         """Return True if ``mark`` lies within ``[min, max]``."""
         return self.min <= mark <= self.max
 
@@ -55,7 +63,8 @@ class Criterion:
     Attributes:
         id: Stable identifier and JSON key, e.g. ``"argument"``.
         name: Human-readable name.
-        weight: Share of the overall mark. All weights in a rubric sum to 1.0.
+        weight: Share of the overall mark (float or Decimal, by numeric mode). The
+            weights as written in the file sum to exactly 1.
         description: What the criterion assesses.
         descriptors: Band id to what this criterion looks like in that band.
             Bands may be omitted, in which case the band's general descriptor applies.
@@ -63,7 +72,7 @@ class Criterion:
 
     id: str
     name: str
-    weight: float
+    weight: Num
     description: str
     descriptors: dict[str, str]
 
@@ -92,24 +101,29 @@ class Rubric:
     max_words: int
     sha256: str
 
-    def band_for(self, mark: float) -> Band:
-        """Return the band containing ``mark``, rounding half up first.
+    def band_for(self, mark: Any) -> Band:
+        """Return the band for ``mark``: the highest band whose ``min`` is at or below it.
 
-        Rounding first matters for fractional marks such as a median of 69.5,
-        which belongs to the band containing 70.
+        Using band minimums makes the bands continuous, which floats need: a
+        float mark of 0.79995 lies between First (max 0.7999) and Exceptional
+        first (min 0.8) and belongs to First. In ``decimal`` mode the mark is
+        first rounded half up to 4 places, so the median 0.69995 of two samples
+        becomes 0.7000, a First.
 
         Raises:
-            RubricError: ``mark`` is outside 0-100.
+            RubricError: ``mark`` is outside 0.0-1.0.
         """
-        rounded = int(mark + 0.5)  # round half up, consistent with grader.round_half_up
-        for band in self.bands:
-            if band.contains(rounded):
+        m = normalise_mark(mark)
+        if not 0 <= m <= 1:
+            raise RubricError(f"mark {mark} is outside 0.0-1.0")
+        for band in self.bands:  # highest first
+            if m >= band.min:
                 return band
-        raise RubricError(f"mark {mark} is outside every band")
+        raise RubricError(f"mark {mark} is below every band")
 
     @property
-    def boundaries(self) -> list[int]:
-        """Lower bounds of every band except the lowest, e.g. ``[80, 70, 60, 50, 40, 30]``."""
+    def boundaries(self) -> list[Num]:
+        """Lower bounds of every band except the lowest, e.g. ``[0.8000, 0.7000, ..., 0.3000]``."""
         return [b.min for b in self.bands if b.min > 0]
 
 
@@ -128,7 +142,8 @@ def load_rubric(path: str | Path) -> Rubric:
     """
     raw_bytes = Path(path).read_bytes()
     try:
-        data = tomllib.loads(raw_bytes.decode("utf-8"))
+        # Numbers are read in the current numeric mode: float by default, or exact Decimal.
+        data = tomllib.loads(raw_bytes.decode("utf-8"), parse_float=parse_float())
     except tomllib.TOMLDecodeError as e:
         raise RubricError(f"{path}: invalid TOML: {e}") from e
     return parse_rubric(data, hashlib.sha256(raw_bytes).hexdigest())
@@ -150,7 +165,7 @@ def parse_rubric(data: dict[str, Any], sha256: str = "") -> Rubric:
         bands = tuple(
             sorted(
                 (
-                    Band(str(b["id"]), str(b["label"]), int(b["min"]), int(b["max"]), str(b["descriptor"]))
+                    Band(str(b["id"]), str(b["label"]), num(b["min"]), num(b["max"]), str(b["descriptor"]))
                     for b in data["bands"]
                 ),
                 key=lambda b: b.min,
@@ -161,7 +176,7 @@ def parse_rubric(data: dict[str, Any], sha256: str = "") -> Rubric:
             Criterion(
                 str(c["id"]),
                 str(c["name"]),
-                float(c["weight"]),
+                num(c["weight"]),
                 str(c.get("description", "")),
                 {str(k): str(v) for k, v in c.get("descriptors", {}).items()},
             )
@@ -191,8 +206,13 @@ def validate(rubric: Rubric) -> None:
 
     * at least one band and one criterion;
     * unique band ids and unique criterion ids;
-    * bands cover 0-100 exactly, with no gaps or overlaps;
-    * criterion weights are positive and sum to 1.0;
+    * band bounds have at most 4 decimal places, and the bands cover
+      0.0000-1.0000 exactly: each band ends 0.0001 below where the band above
+      begins, with no gaps or overlaps;
+
+    These checks use exact Decimals of the numbers as written (floats via their
+    shortest form), so a rubric is valid or invalid in both numeric modes alike.
+    * criterion weights are positive and, as written, sum to exactly 1 (no tolerance);
     * criterion descriptors refer only to bands that exist.
 
     Raises:
@@ -207,16 +227,23 @@ def validate(rubric: Rubric) -> None:
     if len(set(ids)) != len(ids):
         raise RubricError("band ids must be unique")
 
-    # Walk down from 100: each band must end one below where the previous band began.
-    expected = 100
+    # Walk down from 1.0000: each band must end one step (0.0001) below where the band above began.
+    expected = Decimal(1)
     for band in rubric.bands:
-        if band.min > band.max:
+        lo, hi = dec(band.min), dec(band.max)
+        for bound in (lo, hi):
+            if bound != bound.quantize(MARK_QUANTUM):
+                raise RubricError(f"band {band.id}: {bound} has more than {MARK_PLACES} decimal places")
+        if lo > hi:
             raise RubricError(f"band {band.id}: min > max")
-        if band.max != expected:
-            raise RubricError(f"bands must cover 0-100 without gaps or overlaps (problem at band {band.id})")
-        expected = band.min - 1
-    if expected != -1:
-        raise RubricError("the lowest band must start at 0")
+        if hi != expected:
+            raise RubricError(
+                f"bands must cover 0.0000-1.0000 without gaps or overlaps: band {band.id} should end at "
+                f"{expected.quantize(MARK_QUANTUM)}, not {hi}"
+            )
+        expected = lo - MARK_QUANTUM
+    if expected != -MARK_QUANTUM:
+        raise RubricError("the lowest band must start at 0.0000")
 
     cids = [c.id for c in rubric.criteria]
     if len(set(cids)) != len(cids):
@@ -227,6 +254,7 @@ def validate(rubric: Rubric) -> None:
         unknown = set(c.descriptors) - set(ids)
         if unknown:
             raise RubricError(f"criterion {c.id}: descriptors for unknown bands {sorted(unknown)}")
-    total = sum(c.weight for c in rubric.criteria)
-    if abs(total - 1.0) > 1e-6:  # tolerate floating-point error, e.g. 0.1 + 0.2
-        raise RubricError(f"criterion weights must sum to 1.0 (got {total:g})")
+    # Summed as exact Decimals, so 0.1 + 0.2 + 0.7 is exactly 1 even when the weights are floats.
+    total = sum((dec(c.weight) for c in rubric.criteria), Decimal(0))
+    if total != 1:
+        raise RubricError(f"criterion weights must sum to exactly 1 (got {total})")

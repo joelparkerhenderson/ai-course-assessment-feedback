@@ -11,6 +11,8 @@ description: Measure how well the gpt-oss marker agrees with human markers (QWK,
    ideally 30 or more, covering the full range of bands, with the same brief and rubric.
    Put the human marks in a CSV, e.g. `id,mark`, where `id` is the essay file
    name without its extension. Use `--id-column`/`--mark-column` for other headers.
+   If the human marks aren't 0-100, give their scale when you grade *and* when you
+   evaluate, e.g. `--score-min 0.0000 --score-max 1.0000`.
 2. Mark the essays with the `mark-essays` skill into a dedicated directory,
    e.g. `results/calibration-<date>`.
 3. Run:

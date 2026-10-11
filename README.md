@@ -36,6 +36,7 @@ student, and review flags that tell a human which essays need a closer look.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Tutorial: marking a module's essays](#tutorial-marking-a-modules-essays)
 - [Commands](#commands)
 - [Choosing models](#choosing-models)
   - [Model options](#model-options)
@@ -77,7 +78,8 @@ student, and review flags that tell a human which essays need a closer look.
    your reporting scale (by default 0-100 integers).
 5. **Flag**: the essay is flagged if samples disagree, the mark is borderline,
    quotes can't be found in the essay, the word count is outside limits,
-   injection-like text is present, or the model raised integrity concerns.
+   injection-like text is present, the model raised integrity concerns, or a
+   mark had to be clamped into its band.
 6. **Record**: a JSON file per essay with marks, feedback, flags, every raw
    sample, and full provenance, plus a summary CSV and an append-only audit log.
 
@@ -138,6 +140,70 @@ python3 -m marker grade submissions/ \
   --rubric rubrics/uk-undergraduate-essay.toml \
   --out results/ps2001-essay-1
 ```
+
+## Tutorial: marking a module's essays
+
+This walks through a complete marking round, from submissions to moderated
+marks. Each step names the skill an AI assistant can follow for it.
+
+**1. Prepare the essays** ([`prepare-essays`](skills/prepare-essays/SKILL.md)).
+Put one file per student in a folder, as `.txt`, `.md` or `.docx`. The file
+name without its extension becomes the essay id, so use unique, anonymised
+names such as `cand-0412.docx`. Convert PDFs first.
+
+**2. Write the rubric** ([`write-rubric`](skills/write-rubric/SKILL.md)).
+Copy `rubrics/uk-undergraduate-essay.toml`, adapt the criteria, weights and
+descriptors to your marking scheme, and validate it:
+
+```sh
+cp rubrics/uk-undergraduate-essay.toml rubrics/ps1002-essay-1.toml
+python3 -m marker rubric --rubric rubrics/ps1002-essay-1.toml
+```
+
+**3. Write the brief.** Save the essay question and instructions as plain
+text, e.g. `briefs/ps1002-essay-1.txt`. The model marks against it.
+
+**4. Check the model.**
+
+```sh
+python3 -m marker check                 # gpt-oss:20b by default
+```
+
+**5. Calibrate** ([`calibrate-marker`](skills/calibrate-marker/SKILL.md)).
+Mark 20-40 essays that your markers have already marked, and compare:
+
+```sh
+python3 -m marker grade calibration/ --brief briefs/ps1002-essay-1.txt \
+  --rubric rubrics/ps1002-essay-1.toml --out results/calibration
+python3 -m marker evaluate --results results/calibration/summary.csv --human human-marks.csv
+```
+
+Use it only if its agreement (QWK) is close to your markers' agreement with
+each other.
+
+**6. Mark the batch** ([`mark-essays`](skills/mark-essays/SKILL.md)). Use the
+same settings you calibrated with:
+
+```sh
+python3 -m marker grade submissions/ --brief briefs/ps1002-essay-1.txt \
+  --rubric rubrics/ps1002-essay-1.toml --out results/ps1002-essay-1
+```
+
+An interrupted run can simply be restarted: finished essays are reused.
+
+**7. Optionally compare models** ([`compare-models`](skills/compare-models/SKILL.md)).
+Add more `--model` tags to mark with several models and get a panel mark and a
+comparison (see [Comparing models](#comparing-models)).
+
+**8. Moderate** ([`moderate-flagged-essays`](skills/moderate-flagged-essays/SKILL.md)).
+Open `results/ps1002-essay-1/summary.csv`, sort by `needs_review`, and read
+the reasons for each flagged essay:
+
+```sh
+python3 -m marker show results/ps1002-essay-1/cand-0412.json --show explanation
+```
+
+A human marker confirms or changes every mark before it is released.
 
 ## Commands
 
@@ -299,12 +365,16 @@ GPU. When you select by `--family`/`--size`, `--mlx` decides which build is used
 
 Exact `--model` tags are always used as given.
 
-> **Reproducibility warning for MLX builds.** In testing with Ollama 0.35.1,
-> MLX builds **did not honour the seed**: identical requests gave different
-> outputs, and the same essay scored 53 and then 50 with `muse-glimmer:30b-mlx`.
-> GGUF builds (e.g. `gpt-oss:20b`, `mistral-small`) gave identical outputs
-> for the same seed. When reproducibility matters, use `--mlx never` or an
-> exact GGUF tag. `marker grade` prints a warning whenever it uses an MLX build.
+> **Reproducibility warning for MLX builds.** With Ollama 0.35.1, MLX builds
+> are **not deterministic**. `qwen3.8:27b-mlx` gave different text for two
+> identical requests even at temperature 0, so the GPU arithmetic itself
+> varies; with sampling and a fixed seed the outputs diverged almost at once,
+> so the seed very likely isn't applied either. The same essay scored 53 and
+> then 50 with `muse-glimmer:30b-mlx`. GGUF builds reproduce exactly: the
+> [full example](#full-example-four-local-models) gave byte-identical answers
+> from four GGUF models on a second run. When reproducibility matters, use
+> `--mlx never` or exact GGUF tags. `marker grade` prints a warning whenever it
+> uses an MLX build.
 
 **Reasoning.** gpt-oss gets the `--think` effort level. Other models that
 report the *thinking* capability have reasoning switched on, and models
@@ -363,11 +433,12 @@ python3 -m marker grade paper.md --model gpt-oss:20b --model muse-glimmer:30b-ml
   --out results/paper-compare --show score,explanation
 ```
 
-**Example: three local models.** This marks the bundled example essay with
-Muse Glimmer 30B (MLX), Qwen 3.8 27B (MLX) and gpt-oss 20B, then compares them:
+**Example: three local models.** This marks the example essay with Muse
+Glimmer 30B (MLX), Qwen 3.8 27B (MLX) and gpt-oss 20B, then compares them:
 
 ```sh
-python3 -m marker grade assets/example-papers/ \
+python3 -m marker grade assets/example-papers/sample-size-and-study-quality.md \
+  --brief assets/example-briefs/sample-size-and-study-quality.txt \
   --model muse-glimmer:30b-mlx \
   --model qwen3.8:27b-mlx \
   --model gpt-oss:20b \
@@ -376,42 +447,29 @@ python3 -m marker grade assets/example-papers/ \
 ```
 
 The same thing on one line: `--model muse-glimmer:30b-mlx,qwen3.8:27b-mlx,gpt-oss:20b`.
-Add `--score-min 0.0000 --score-max 1.0000` to report every score, and the
-comparison table, as a probability with 4 decimal places.
-Check first that all three load: `python3 -m marker check --model muse-glimmer:30b-mlx,qwen3.8:27b-mlx,gpt-oss:20b`.
 With an odd number of models, the panel mark is the middle model's mark. The
-two MLX models trigger the [reproducibility warning](#choosing-models) above.
+two MLX builds trigger the [reproducibility warning](#choosing-models) above,
+so their marks can change between runs.
 
 Each model marks every essay, one model after another, so each model is
 loaded once. Results go to `results/paper-compare/<model>/`. A comparison is
-then printed and saved to `results/paper-compare/comparison.{csv,json}`:
+then printed and saved to `results/paper-compare/comparison.{csv,json}`. The
+[full example](#full-example-four-local-models) below shows real output from
+four models, including the comparison table.
 
-```
-Model comparison: 2 models, 1 essay(s); marks shown on 0-100
+Add `--score-min 0.0000 --score-max 1.0000` to report every score, and the
+comparison table, as a probability with 4 decimal places. Check first that
+every model loads with `python3 -m marker check --model ...`.
 
-Essay: paper
-  criterion   gpt-oss:20b  muse-glimmer:30b-mlx  spread
-  knowledge            62                    55       7
-  argument             58                    52       6
-  ...
-  OVERALL              60                    53       7
-  band       Upper second (2:1)  Lower second (2:2)
-  panel mark: 57 (Lower second (2:2)), median 0.5650; models agree: no
-  - models place the essay in different bands
-
-Pairwise agreement (a vs b; mean diff = a - b, on 0-100)
-  gpt-oss:20b vs muse-glimmer:30b-mlx: n=1  mean diff +7  MAE 7  exact band 0%  QWK n/a (needs 2+ essays)
-```
-
-*(Illustrative numbers. For real output, see the [full example](#full-example-four-local-models).)*
-
-- **Panel mark**: the exact median of the models' overall marks
-  (0.0000-1.0000), shown on the reporting scale and saved as `panel_score`.
+- **Panel mark**: the median of the models' overall marks (with an odd
+  number of models, the middle one; with an even number, the midpoint of the
+  middle two), shown on the reporting scale and saved as `panel_score`.
   Using several different judges reduces the effect of any one model's
   biases, much like double marking. To validate it against human marks:
   `marker evaluate --results results/paper-compare/comparison.csv --results-mark-column panel_score --human human.csv`.
-- **Models agree** when every model gives the same band and the overall
-  spread is within `--disagreement` (default 0.1000, i.e. 10 points).
+- **Models agree** when every model marked the essay, all give the same band,
+  and the overall spread is within `--disagreement` (default 0.1000, i.e. 10
+  points). Otherwise the comparison notes why, for moderation.
 - **Pairwise agreement** over several essays: mean difference (which model
   is more generous), MAE, exact band agreement, QWK, and per-criterion MAE (in the JSON).
 
@@ -692,14 +750,14 @@ commas, or use `all`:
 
 | View | Prints |
 |---|---|
-| `score` (default) | `id<TAB>mark<TAB>band[<TAB>model]`, plus `[REVIEW]` if flagged. One line, easy to pipe |
+| `score` (default) | `id<TAB>score<TAB>band[<TAB>model]`, plus `[REVIEW]` if flagged. One line, easy to pipe. The model is added when several models are shown |
 | `explanation` | Each criterion's mark, band, sample marks, justification and evidence quotes (quotes not found in the essay are marked), then strengths, improvements, integrity concerns and review flags |
 | `thinking` | The model's reasoning trace for each sample. Asking for it during `grade` stores it automatically |
 
 ```sh
-python3 -m marker grade paper.md --show score                       # just the mark
-python3 -m marker grade paper.md --show explanation,score           # why, then the mark
-python3 -m marker grade paper.md --show all                         # thinking, explanation, mark
+python3 -m marker grade paper.md --show score                       # just the score
+python3 -m marker grade paper.md --show explanation,score           # why, then the score
+python3 -m marker grade paper.md --show all                         # thinking, explanation, score
 python3 -m marker show results/paper.json --show thinking           # from a saved result
 ```
 
@@ -845,12 +903,12 @@ Result JSON (abridged):
 {
   "essay": {"id": "…", "path": "…", "word_count": 3412, "sha256": "…"},
   "numeric": "float",               // or "decimal"
-  "mark": 0.581,                    // internal mark 0.0-1.0 (decimal mode: exact string "0.5810")
-  "weighted_mark": 0.581,           // unrounded
-  "score": {"value": 58.0, "min": "0", "max": "100", "places": 0},   // on the reporting scale
+  "mark": 0.589,                    // internal mark 0.0-1.0 (decimal mode: exact string "0.5890")
+  "weighted_mark": 0.589,           // unrounded weighted mean; the score is computed from it
+  "score": {"value": 59.0, "min": "0", "max": "100", "places": 0},   // on the reporting scale
   "band": {"id": "lower_second", "label": "Lower second (2:2)"},
   "needs_review": true,
-  "flags": ["borderline: 0.5810 is within 0.0200 of the 0.6000 boundary"],
+  "flags": ["borderline: 59% is within 2% below the 60% boundary"],
   "criteria": {
     "argument": {
       "mark": 0.55, "band": "lower_second", "weight": 0.3,
@@ -863,12 +921,13 @@ Result JSON (abridged):
   "integrity_concerns": [],
   "samples": [ /* every raw sample: seed, marks, justification, raw JSON, timing, tokens, reasoning if kept */ ],
   "provenance": {
-    "marker_version": "0.1.0", "prompt_version": "2.0.0", "analysis_version": "5",
+    "marker_version": "0.1.0", "prompt_version": "2.0.0", "analysis_version": "7",
     "prompt_sha256": "…", "schema_sha256": "…",
     "rubric": {"name": "…", "version": "1.0.0", "sha256": "…"},
     "brief_sha256": "…", "model": "gpt-oss:20b", "model_digest": "f2b8…",
     "ollama_version": "0.35.1", "settings": {…}, "fingerprint": "…",
     "python": "3.11.11", "platform": "…", "marked_at": "2026-10-09T15:00:00+00:00"
+    // "reanalysed_at" is added when saved samples are re-analysed
   }
 }
 ```
@@ -880,7 +939,7 @@ Result JSON (abridged):
 | Flag | Why it matters |
 |---|---|
 | `samples disagree on <criterion>` | The model's independent judgements varied by more than `--disagreement` (0.1000), so it is less certain |
-| `borderline: M is within 0.0200 of the B boundary` | UK exam-board practice: marks just below a classification boundary get a second look (`--boundary-margin`) |
+| `borderline: M% is within 2% below the B% boundary` | UK exam-board practice: marks just below a classification boundary get a second look (`--boundary-margin`) |
 | `<criterion>: k evidence quote(s) not found in the essay` | The model "quoted" text that isn't there (e.g. a paraphrase), so its justification is suspect. Matching ignores case, punctuation, spacing and dash/quote variants, so typography alone never triggers it |
 | `word count … below the minimum / exceeds the limit` | Rubric word limits (flagged only, never penalised automatically) |
 | `possible prompt injection in essay: …` | The essay contains text that seems aimed at an AI marker |
@@ -927,27 +986,39 @@ say so, e.g. `--score-min 0.0000 --score-max 1.0000` for probabilities. See
   schema, rubric file and brief.
 - **Fingerprint**: one hash over all of the above plus settings. Equal
   fingerprints mean equal inputs.
-- **Deterministic aggregation**: median, weighted mean, and round half up.
-  For results that must be byte-identical across machines and languages, use
-  `--numeric decimal`, which is exact. Floats are deterministic in Python on
-  IEEE 754 hardware, but not exact.
+- **Deterministic aggregation**: median per criterion, then the weighted mean
+  (rounded half up to 4 places in decimal mode). For results that must be
+  byte-identical across machines and languages, use `--numeric decimal`,
+  which is exact. Floats are deterministic in Python on IEEE 754 hardware,
+  but not exact.
+- **Versions**: `prompt_version` and `analysis_version` are recorded. When
+  only the analysis rules change, saved results are re-analysed from their
+  stored samples without calling the model.
+
+**Verified:** the [full example](#full-example-four-local-models) was run
+twice, and all 8 raw answers from four GGUF models were byte-identical.
 
 **Limits:** bit-identical model output is expected only with the same
-weights, Ollama build and hardware, and only for GGUF builds: MLX builds
-ignore the seed (see [Choosing models](#choosing-models)). Floating-point kernels differ between
-GPUs and versions, which is why the digest and Ollama version are recorded.
+weights, Ollama build and hardware, and only for GGUF builds: MLX builds are
+not deterministic (see [Choosing models](#choosing-models)). Floating-point
+kernels differ between GPUs and versions, which is why the digest and Ollama
+version are recorded.
 
 ## Security and privacy
 
-- **Local only.** The client refuses any Ollama host that doesn't resolve
-  exclusively to loopback. `--allow-remote` overrides this; use it only for a
-  server you control, on a network you trust.
+- **Local only.** The client refuses any Ollama host (`--host` or
+  `$OLLAMA_HOST_URL`) that doesn't resolve exclusively to loopback.
+  `--allow-remote` overrides this; use it only for a server you control, on a
+  network you trust.
 - **No dependencies.** The code uses only the Python standard library, so
   there is no third-party code to audit.
 - **Untrusted essays.** Prompt-injection defences: delimiters that can't be
   escaped, explicit "essay is data" instructions, and an independent
   heuristic detector that flags suspicious text for a human. `.docx` parsing
-  is restricted to `document.xml`, with a size cap.
+  is restricted to `document.xml`, with a 50 MiB size cap.
+- **No silent truncation.** A prompt that may not fit in the context window
+  is refused, so the model never marks an essay without its instructions
+  (see [Context window](#marker-grade-essay_or_dir)).
 - **Data handling.** `results/` contains quotes from essays and is personal
   data. Keep it out of version control (it is in `.gitignore`) and apply your
   institution's retention policy. `audit.jsonl` holds hashes, not text.
@@ -973,8 +1044,13 @@ result = grade_essay(
     model_digest=client.model_digest(settings.model),
     ollama_version=client.version(),
 )
-print(result["mark"], result["band"]["label"], result["flags"])
+print(result["score"]["value"], result["band"]["label"], result["flags"])
 ```
+
+`grade_essay` raises `OllamaError` if no valid answer is obtained, and its
+subclass `ContextOverflow` if the prompt doesn't fit in `settings.num_ctx`.
+Library use runs in the default float mode; call
+`marker.scale.set_numeric("decimal")` first for exact Decimals.
 
 All public functions have docstrings: `python3 -m pydoc marker.grader`.
 
@@ -992,12 +1068,16 @@ marker/                 Python package (stdlib only)
   essay.py                .txt/.md/.docx loading
   ollama.py               loopback-only Ollama client
   evaluate.py             QWK, MAE, RMSE, bias, band agreement
+  scale.py                numeric modes, rounding, score scales, display percents
 rubrics/                marking rubrics (TOML)
-assets/example-papers/  example essays for testing
+assets/example-papers/  example essays (the original one is committed; third-party ones are gitignored)
+assets/example-briefs/  assignment briefs for the example essays
 docs/research.md        research on marking practice and LLM marking
-spec/index.md           project specification
-skills/                 AI agent skills (mark, rubric, calibrate, moderate, prepare)
-AGENTS.md, AGENTS/      guidance for AI coding agents
+spec/index.md           project specification (single source of truth for behaviour)
+skills/                 AI agent skills (mark, compare, rubric, calibrate, moderate, prepare)
+AGENTS.md, AGENTS/      guidance for AI coding agents; CLAUDE.md imports AGENTS.md
+llms.txt, llms.json     descriptions of the tool for AI assistants
+tools/                  maintenance scripts (update_llms_json.py)
 tests/                  offline unit tests
 ```
 
@@ -1013,13 +1093,18 @@ tests/                  offline unit tests
   - `calibrate-marker`: measure agreement with human marks
   - `moderate-flagged-essays`: support human review of flagged essays
   - `prepare-essays`: convert web pages and PDFs into markable Markdown
+- [`llms.txt`](llms.txt) and [`llms.json`](llms.json): a summary and links in
+  the [llms.txt](https://llmstxt.org) format, and a structured description with
+  every command and option. The command list in `llms.json` is generated from
+  the CLI by `python3 tools/update_llms_json.py`, and a test fails if it drifts.
 
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests -t .   # offline tests, < 1 s
-uvx ruff check marker tests --select F,E9    # lint
-uvx mypy marker                              # types (clean)
+python3 -m unittest discover -s tests -t .        # offline tests, < 1 s
+uvx ruff check marker tests tools --select F,E9   # lint
+uvx mypy marker tools                             # types (clean)
+python3 tools/update_llms_json.py                 # after changing CLI options
 ```
 
 The tests use a fake Ollama client, so no model is needed. For an end-to-end
@@ -1033,12 +1118,17 @@ check, see [`AGENTS/testing.md`](AGENTS/testing.md).
   by the prompt design, not eliminated. Measure them with `evaluate`.
 - The tool only sees text. Figures, tables-as-images and formatting are lost.
 - `.pdf` isn't read directly. Convert it first (see `skills/prepare-essays`).
-- Reproducibility is exact only on the same weights, Ollama build and hardware.
+- Reproducibility is exact only on the same weights, Ollama build and
+  hardware, and only for GGUF builds.
+- Essays longer than about 8,000 words need a larger `--num-ctx` (and the
+  memory to match).
 
 ## License
 
 GPL-3.0. See [LICENSE.md](LICENSE.md).
 
+The example essay `assets/example-papers/sample-size-and-study-quality.md`
+and its brief are original and GPL-3.0 like the rest of the repository.
 Third-party example essays in `assets/example-papers/` are copyrighted by
 their owners. They are gitignored and kept only as local test inputs. See
 [`assets/example-papers/README.md`](assets/example-papers/README.md) for

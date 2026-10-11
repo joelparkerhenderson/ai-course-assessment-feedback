@@ -12,16 +12,24 @@ description: Mark the same essays with two or more local models (e.g. gpt-oss 20
    - "gpt-oss in both sizes": `--family gpt-oss --size 20b,120b`
    - "ChatGPT-OSS vs Muse Glimmer": `--family "ChatGPT-OSS" --family "Muse Glimmer"`
    - "MLX vs normal build": `--family <f> --size <s> --mlx any`
-   Run `python3 -m marker check` with the same options. Drop any model reported as UNUSABLE, and tell the user.
+   Run `python3 -m marker check` with the same options. Drop any model reported as
+   `UNUSABLE`, and tell the user. If any selected model is an MLX build, warn that
+   its marks can change between runs (MLX isn't deterministic in Ollama);
+   prefer GGUF builds when the comparison must be reproducible.
 2. **Run.** Use the same essays, brief, rubric and settings for every model:
    ```sh
    python3 -m marker grade <essays> --brief brief.txt --model X --model Y \
      --out results/compare-<name> [--show score,explanation]
    ```
    Models run one after another. Expect each model's time per essay to add up,
-   so run long batches in the background.
+   so run long batches in the background. Reasoning can differ per model,
+   e.g. `--think high,gpt-oss:120b=low`; record that when reporting, because
+   the models are then not compared on equal terms. Mistral-style models
+   without a thinking capability simply don't reason (a note is printed).
+   For real output to compare against, see the README "Full example".
 3. **Report** from the printed table and `results/compare-<name>/comparison.csv`:
-   - each model's mark and band per essay, and the **panel mark**;
+   - each model's score and band per essay, and the **panel mark** (the median;
+     with an even number of models, the midpoint of the middle two);
    - where the models disagree (different bands, or a spread above `--disagreement`),
      and on which criteria (the per-criterion spread);
    - for several essays, the pairwise mean difference (which model is more

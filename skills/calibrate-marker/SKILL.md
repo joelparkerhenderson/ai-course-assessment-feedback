@@ -1,6 +1,6 @@
 ---
 name: calibrate-marker
-description: Measure how well the gpt-oss marker agrees with human markers (QWK, MAE, bias, band agreement) with `marker evaluate`, and interpret the result. Use before trusting the marker on live work, after changing the model, rubric or prompt, or when the user asks how accurate or reliable the marks are.
+description: Measure how well the marker (any local model, or a multi-model panel) agrees with human markers (QWK, MAE, bias, band agreement) with `marker evaluate`, and interpret the result. Use before trusting the marker on live work, after changing the model, rubric or prompt, or when the user asks how accurate or reliable the marks are.
 ---
 
 # Calibrate the marker against human marks
@@ -14,11 +14,16 @@ description: Measure how well the gpt-oss marker agrees with human markers (QWK,
    If the human marks aren't 0-100, give their scale when you grade *and* when you
    evaluate, e.g. `--score-min 0.0000 --score-max 1.0000`.
 2. Mark the essays with the `mark-essays` skill into a dedicated directory,
-   e.g. `results/calibration-<date>`.
+   e.g. `results/calibration-<date>`. Use exactly the settings you will use
+   for live marking (model, `--think`, `--samples`, rubric, brief), and a GGUF
+   build: MLX builds aren't deterministic, so a calibration with them can't be
+   reproduced.
 3. Run:
    ```sh
    python3 -m marker evaluate --results results/calibration-<date>/summary.csv --human human.csv [--rubric ...]
    ```
+   For a multi-model panel, evaluate the panel score:
+   `--results results/<dir>/comparison.csv --results-mark-column panel_score`.
 4. Interpret the result:
    - **QWK (marks)**: compare it with *human-human* agreement on the same
      essays if you have double-marked data. AES research treats agreement

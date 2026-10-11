@@ -14,7 +14,8 @@ Background and citations: `docs/research.md`. Summary of what the code must keep
 5. **Review flags** (any flag means `needs_review = true`):
    - sample spread > `disagreement_threshold` (default 0.1000) on any criterion;
    - final mark within `boundary_margin` (default 0.0200) below a classification boundary;
-   - evidence quotes not found in the essay;
+   - evidence quotes not found in the essay (each distinct quote counted once
+     across samples);
    - word count outside the rubric's limits (flag only, never a penalty);
    - injection-like text in the essay;
    - integrity concerns raised by the model;
@@ -22,5 +23,13 @@ Background and citations: `docs/research.md`. Summary of what the code must keep
 6. **Validation** with `marker evaluate`: QWK, MAE, RMSE, bias, Pearson r, and
    band agreement against human marks.
 
+7. **Several models** can mark the same essays. Their panel mark is the median
+   of the models' marks (the midpoint of the middle two with an even number),
+   and essays where models disagree on the band are noted for moderation.
+8. **Display:** marks shown in the terminal are whole percents rounded half to
+   even (`scale.fmt_percent`); stored values and scores are never affected.
+
 Changes that alter marks (aggregation, rounding, clamping, prompt) need a
-note in the README changelog and a re-calibration run.
+version bump (`ANALYSIS_VERSION` or `PROMPT_VERSION`), an explanation in the
+commit message, updates to `spec/index.md`, and a re-calibration run
+(`skills/calibrate-marker`).

@@ -9,11 +9,13 @@ For every essay the comparison reports:
 
 * each model's overall mark, band and per-criterion marks;
 * the **spread** (max - min) across models, overall and per criterion;
-* a **panel mark**: the median of the models' overall marks, rounded half up to
-  4 places. This is the multi-model analogue of double marking. Using several
+* a **panel mark**: the median of the models' overall marks (the midpoint of
+  the middle two with an even number of models; rounded half up to 4 places in
+  decimal mode). This is the multi-model analogue of double marking. Using several
   different judges ("a jury") reduces the effect of any one model's biases;
 * a **panel score** on the reporting scale, when every model's result uses the same scale;
-* whether the models **agree**: the same band, and an overall spread within the threshold.
+* whether the models **agree**: every model marked the essay, all give the same
+  band, and the overall spread is within the threshold.
 
 For every pair of models it reports agreement over the essays both marked:
 n, mean difference, MAE, exact band agreement and QWK, using the metrics in

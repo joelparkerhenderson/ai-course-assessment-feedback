@@ -9,6 +9,8 @@ Three views can be combined (``--show score,explanation,thinking``):
 * ``explanation``: for each criterion, the mark, band, sample marks,
   justification and evidence quotes (unverified quotes are marked), followed by
   the feedback (strengths and improvements), integrity concerns and review flags.
+  Marks, weights and spreads are shown as whole percents rounded half to even
+  (:func:`marker.scale.fmt_percent`); the overall score is on the reporting scale.
 * ``thinking``: the model's reasoning trace for each sample (gpt-oss's
   analysis channel, or another thinking model's reasoning). It is only
   available if the result was produced with reasoning kept

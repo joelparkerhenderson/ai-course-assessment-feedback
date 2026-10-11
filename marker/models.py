@@ -25,10 +25,17 @@ any    every matching build
 Exact ``--model`` tags are always used exactly as given; the MLX policy
 doesn't filter them.
 
-**Reproducibility caveat.** In testing with Ollama 0.35.1, MLX builds did
-*not* honour ``options.seed``: the same request gave different outputs. GGUF
-builds were deterministic. MLX builds trade reproducibility for speed on
-Apple Silicon, and ``marker grade`` warns when it uses one.
+**Reproducibility caveat.** With Ollama 0.35.1, MLX builds are not
+deterministic: identical requests differed even at temperature 0, and with a
+fixed seed they diverged almost at once. GGUF builds reproduced byte for byte.
+MLX builds trade reproducibility for speed on Apple Silicon, and
+``marker grade`` warns when it uses one.
+
+**Reasoning.** :func:`parse_think` reads ``--think`` (a default setting plus
+``MODEL=SETTING`` overrides), :func:`think_setting` picks each model's
+setting, and :func:`think_for` turns it into Ollama's ``think`` value: an
+effort level for gpt-oss, True or False for other thinking models, and None
+(not sent) for models without the thinking capability.
 """
 
 from __future__ import annotations

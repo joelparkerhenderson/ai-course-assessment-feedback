@@ -31,6 +31,12 @@ the scale the user chose for the final score:
     score = min + fraction x (max - min),  rounded half up to ``places`` decimals
 
 The default is 0-100 integers, so a weighted fraction of 0.621 is reported as 62.
+
+**Display.** Fractions shown to people in the terminal (marks, weights,
+spreads, rates, values in flag text) use :func:`fmt_percent`: a whole percent
+rounded half to even on the exact decimal value, so 0.135 shows as 14%. This
+is the only place rounding is half to even; values and scores round half up.
+The prompt uses :func:`fmt_mark` (4 places) so it is identical in both modes.
 """
 
 from __future__ import annotations
@@ -231,6 +237,11 @@ class Scale:
     places: int
 
     def __post_init__(self) -> None:
+        """Check the scale is usable.
+
+        Raises:
+            ValueError: A bound isn't finite, ``min >= max``, or ``places`` is outside 0 to :data:`MAX_PLACES`.
+        """
         if not (self.min.is_finite() and self.max.is_finite()):
             raise ValueError("score bounds must be finite numbers")
         if self.min >= self.max:

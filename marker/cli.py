@@ -180,6 +180,7 @@ def bounded_float(low: float, high: float, *, low_open: bool = False) -> Any:
     """argparse type factory: a finite float in ``[low, high]`` (or ``(low, high]`` with ``low_open``)."""
 
     def parse(text_value: str) -> float:
+        """Parse one value; NaN and infinities fail the range check, so they are rejected too."""
         x = float(text_value)
         if not (low < x <= high if low_open else low <= x <= high):
             interval = f"({low}, {high}]" if low_open else f"[{low}, {high}]"
@@ -636,7 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_scale(sp: argparse.ArgumentParser, *, defaults: bool = True) -> None:
         """Add the score-scale options. ``defaults=False`` leaves them unset (``show`` then keeps each saved scale)."""
-        g = sp.add_argument_group("score scale (marks are held internally as decimals 0.0000-1.0000)")
+        g = sp.add_argument_group("score scale (marks are held internally as fractions 0.0-1.0)")
         g.add_argument("--score-min", default="0" if defaults else None, metavar="DEC",
                        help="score for 0%%, as an exact decimal (default 0)")
         g.add_argument("--score-max", default="100" if defaults else None, metavar="DEC",

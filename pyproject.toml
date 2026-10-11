@@ -1,7 +1,7 @@
 [project]
 name = "marker"
 version = "0.1.0"
-description = "Mark student essays 0-100 against a rubric with a local gpt-oss model via Ollama"
+description = "Mark student essays against a rubric with local Ollama models (default gpt-oss), reproducibly and privately"
 readme = "README.md"
 license = {text = "GPL-3.0-only"}
 requires-python = ">=3.11"

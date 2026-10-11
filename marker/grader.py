@@ -2,18 +2,23 @@
 
 This module is the core of the marker. For one essay it:
 
-1. Builds the prompt (:mod:`marker.prompt`) and the JSON schema the model must follow.
+1. Builds the prompt (:mod:`marker.prompt`) and the JSON schema the model must follow,
+   and refuses a prompt that may not fit in the context window (:func:`check_context`),
+   because Ollama would silently truncate it.
 2. Asks the model for ``Settings.samples`` independent judgements, each with its own
    fixed seed (``seed``, ``seed + 1``, ...) so the whole run can be reproduced.
 3. Validates every answer (:func:`parse_response`) and retries an invalid one with a
    *derived* seed (``seed + 1000 * attempt``), so retries are reproducible too.
+   Ollama's token counts are checked after every answer: a prompt that filled
+   the window fails the essay, and a context overflow during the answer is retried.
 4. Aggregates criterion marks with the **median** across samples, then computes the
    weighted overall mark **in code**. The model never does arithmetic. Marks are
    fractions from 0.0 to 1.0: Python floats by default, or exact 4-place
    :class:`~decimal.Decimal` in ``decimal`` mode (see :mod:`marker.scale`).
 5. Raises review flags for things a human examiner should look at: sample
    disagreement, borderline marks, quotes that aren't in the essay, word limits,
-   possible prompt injection, and integrity concerns raised by the model.
+   possible prompt injection, integrity concerns raised by the model, and marks
+   that had to be clamped into their band.
 6. Returns a JSON-serialisable result with full provenance (model digest, prompt
    hash, settings, versions) for audit and reproducibility.
 
@@ -55,7 +60,9 @@ class ChatClient(Protocol):
         schema: dict[str, Any] | None,
         options: dict[str, Any],
         think: str | bool | None,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        """Send one chat request and return Ollama's response dict (``message``, token counts, ``done_reason``)."""
+        ...
 
 
 @dataclass
@@ -114,6 +121,11 @@ class Settings:
     extra_options: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Refuse extra options that would override a managed one (seed, temperature, ...).
+
+        Raises:
+            ValueError: ``extra_options`` contains a key in :data:`MANAGED_OPTIONS`.
+        """
         clash = MANAGED_OPTIONS & set(self.extra_options)
         if clash:
             raise ValueError(f"set {', '.join(sorted(clash))} with its own setting, not as an extra option")

@@ -2,6 +2,7 @@
 
 Modules:
 
+* :mod:`marker.scale`: numeric modes (float or exact Decimal), rounding, score scales, display percents.
 * :mod:`marker.rubric`: load and validate analytic rubrics (TOML).
 * :mod:`marker.essay`: read essays from .txt, .md and .docx.
 * :mod:`marker.prompt`: build the marking prompt and the output JSON schema.
@@ -26,7 +27,11 @@ Library use::
         client, settings, load_rubric("rubrics/uk-undergraduate-essay.toml"), load_essay("essay.md"),
         model_digest=client.model_digest(settings.model),
     )
-    print(result["mark"], result["band"]["label"], result["flags"])
+    print(result["score"]["value"], result["band"]["label"], result["flags"])
+
+``grade_essay`` raises :class:`marker.ollama.OllamaError` when no valid answer
+can be obtained, and its subclass :class:`marker.grader.ContextOverflow` when
+the prompt doesn't fit in ``Settings.num_ctx``.
 """
 
 __version__ = "0.1.0"

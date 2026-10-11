@@ -18,11 +18,11 @@ specification records the requirements that came out of it. Requirement ids
 | Id | Requirement |
 |----|-------------|
 | CON-1 | The default model is **gpt-oss** (`gpt-oss:20b`; `gpt-oss:120b` optional), run **locally** through Ollama. Any other local Ollama model may be selected (see MODEL-*). |
-| CON-2 | **Security:** essay text must never leave the machine. Only loopback model servers are allowed unless the operator explicitly opts in (`--allow-remote`). |
+| CON-2 | **Security:** essay text must never leave the machine. Only loopback model servers are allowed unless the operator explicitly opts in (`--allow-remote`). The server is `--host` (default `http://127.0.0.1:11434`, or the `OLLAMA_HOST_URL` environment variable). |
 | CON-3 | **Security:** no third-party runtime dependencies (Python ≥ 3.11 standard library only). |
 | CON-4 | **Reproducibility:** fixed seeds; every result records the model content digest, Ollama version, settings, and SHA-256 of the prompt, schema, rubric, brief and essay. |
 | CON-5 | Marks are **provisional**: a human marker confirms every released mark. |
-| CON-6 | **Numeric type:** marks are Python `float` by default. Exact `Decimal` is available with `--numeric decimal`. Rounding is always half up. JSON writes floats as numbers and Decimals as exact strings. |
+| CON-6 | **Numeric type:** marks are Python `float` by default. Exact `Decimal` is available with `--numeric decimal`. Values and scores round half up (never Python's `round`); only terminal display percents round half to even (SHOW-4). JSON writes floats as numbers and Decimals as exact strings. |
 
 ## Inputs
 
@@ -32,6 +32,7 @@ specification records the requirements that came out of it. Requirement ids
 | IN-2 | HTML comments in `.md` files are provenance metadata and are not marked. |
 | IN-3 | An optional assignment brief (plain text) is marked against. |
 | IN-4 | A rubric TOML: bands that tile 0.0000-1.0000 exactly, written to 4 decimal places (each band's max is 0.0001 below the next band's min), and criteria with positive weights summing to exactly 1 and optional per-band descriptors. Values are read in the numeric mode, and validation uses the exact written values. Optional word limits. |
+| IN-5 | Essay text is read as UTF-8 (a byte-order mark is dropped), Unicode-normalised to NFC, with line endings normalised; empty essays are rejected. For `.docx`, only `word/document.xml` is read, and files whose uncompressed XML exceeds 50 MiB are rejected (zip-bomb guard). |
 
 ## Model selection
 
@@ -41,10 +42,11 @@ specification records the requirements that came out of it. Requirement ids
 | MODEL-2 | Users can choose models by family (`--family`), matched loosely: case, spaces, hyphens and underscores are ignored, and aliases are accepted (e.g. "ChatGPT-OSS" means `gpt-oss`, "Muse Glimmer" means `muse-glimmer`). |
 | MODEL-3 | Users can choose model sizes (`--size`, e.g. `20b,120b`), matched against the tag size or, failing that, the reported parameter count (±10%). |
 | MODEL-4 | Users can choose Mac-optimised MLX builds (`--mlx auto/prefer/only/never/any`). `auto` prefers MLX on Apple Silicon and excludes it elsewhere. Exact tags are never filtered. |
-| MODEL-5 | `marker models` lists installed models with family, size, quantisation and build, and marks the selection. `marker check` reports each selected model as usable or not. |
+| MODEL-5 | `marker models` lists installed models with family, size, quantisation and build, and marks the selection. `marker check` reports each selected model as usable or not, and exits 1 if any is missing or unusable. |
 | MODEL-6 | The reasoning setting is per model: an effort level for gpt-oss, on for other thinking-capable models, and unset otherwise. The effective value is recorded in provenance. |
 | MODEL-7 | `--think` (alias `--reasoning`) accepts `low`, `medium`, `high`, `on` or `off`, plus `MODEL=SETTING` overrides by exact tag or family. `on` is `medium` for gpt-oss; `off` disables reasoning on other thinking models and is `low` for gpt-oss, which can't disable it (a note is printed). |
 | MODEL-8 | `grade` exposes the sampling and generation options `--temperature`, `--top-p`, `--top-k`, `--min-p`, `--repeat-penalty`, `--num-predict`, `--num-ctx` and `--max-retries`, validated on input, plus `--option KEY=VALUE` for any other Ollama option (not ones with their own flag, or `seed`). All are recorded in provenance and the fingerprint; unset optional ones are left out of the fingerprint so older results stay valid. |
+| MODEL-9 | MLX builds are not seed-deterministic in Ollama (verified with 0.35.1: identical requests differ even at temperature 0). `grade` prints a warning whenever it uses an MLX build; GGUF builds are recommended for reproducible marking. |
 
 ## Scores and precision
 
@@ -67,10 +69,10 @@ specification records the requirements that came out of it. Requirement ids
 | MARK-1 | Analytic, criterion-referenced marking: the model judges each criterion against band descriptors. |
 | MARK-2 | For each criterion the model returns, in this order: justification, verbatim evidence quotes, band, and a decimal mark (0.0000-1.0000) inside the band. If the mark falls outside the band, it is clamped into the band. |
 | MARK-3 | N independent samples (default 3) with seeds `seed + i`. The exact median per criterion is used. |
-| MARK-4 | The overall mark is the exact weighted mean of the criterion medians, **computed in code**, rounded half up to 4 places, and mapped to a band. |
+| MARK-4 | The overall mark is the weighted mean of the criterion medians, **computed in code** (never by the model) in the numeric mode's arithmetic, and mapped to a band. In decimal mode it is rounded half up to 4 places; in float mode it is kept as computed. The score uses the unrounded weighted mean (`weighted_mark`). |
 | MARK-5 | Invalid model output is retried with deterministic derived seeds (`seed + 1000·attempt`), up to `max_retries`. |
 | MARK-6 | The essay is treated as untrusted data: delimited, unable to close its own delimiter, and the model is told never to follow instructions in it. |
-| MARK-7 | Feedback for the student (strengths, improvements) is taken from the most representative sample. |
+| MARK-7 | Each criterion's justification and evidence come from the sample whose mark is closest to that criterion's median. Overall feedback (strengths, improvements) comes from the sample whose own weighted mark is closest to the final weighted mark. Integrity concerns are the union across samples. |
 | MARK-8 | A prompt must never be silently truncated. Before sampling, a conservative estimate (3 characters per token) of the prompt plus the answer reserve (12,288 tokens, or `num_predict`) must fit in `num_ctx`, or the essay fails with the `--num-ctx` to use. After each answer, a prompt that filled `num_ctx` fails the essay, and prompt + answer tokens over `num_ctx` (a context shift) is retried. |
 
 ## Review flags (`needs_review`)
@@ -79,7 +81,7 @@ specification records the requirements that came out of it. Requirement ids
 |----|-----------------|
 | FLAG-1 | A criterion's sample marks spread by more than the threshold (`--disagreement`, default 0.1000). |
 | FLAG-2 | The final mark is within the margin below a classification boundary (`--boundary-margin`, default 0.0200). |
-| FLAG-3 | An evidence quote isn't found in the essay, comparing letters and digits only (case, punctuation, spacing, and Unicode dash and quote variants are ignored), with ellipses splitting the quote into fragments. |
+| FLAG-3 | An evidence quote isn't found in the essay (each distinct quote counted once across samples), comparing letters and digits only (case, punctuation, spacing, and Unicode dash and quote variants are ignored), with ellipses splitting the quote into fragments. |
 | FLAG-4 | The word count is outside the rubric's limits (flag only; no penalty). |
 | FLAG-5 | The essay contains injection-like text (heuristic detector, independent of the model). |
 | FLAG-6 | The model raises integrity concerns. |
@@ -90,16 +92,18 @@ specification records the requirements that came out of it. Requirement ids
 | Id | Requirement |
 |----|-------------|
 | OUT-1 | A per-essay JSON file with mark, band, criteria, feedback, flags, all samples and provenance, written atomically. |
-| OUT-2 | `summary.csv`, rebuilt from all results in the output directory. |
-| OUT-3 | `audit.jsonl`, append-only, containing hashes and marks but no essay text. |
-| OUT-4 | Rerunning with an unchanged input fingerprint skips the essay unless `--force` is given. If the analysis rules have changed (`analysis_version`), the stored samples are re-analysed without calling the model, and the event is logged as `reanalysed`. |
+| OUT-2 | `summary.csv`, rebuilt from all results in the output directory, with columns `id, score, score_min, score_max, mark, band, needs_review`, one column per criterion, then `word_count, flags, model, model_digest`. Scores are written with the scale's places. |
+| OUT-3 | `audit.jsonl`, append-only, one line per event (`marked` or `reanalysed`), containing hashes and marks but no essay text. |
+| OUT-4 | Rerunning with an unchanged input fingerprint skips the essay unless `--force` is given. If the analysis rules (`analysis_version`), the reporting scale or the numeric mode have changed, the stored samples are re-analysed without calling the model, and the event is logged as `reanalysed`. |
+| OUT-5 | Exit codes: `0` success; `1` some essays failed (or, for `check`, a model is unusable); `2` usage or configuration error (bad option, rubric, input, duplicate essay ids, or server error), printed as one line without a traceback. |
+| OUT-6 | `llms.txt` and `llms.json` describe the tool for AI assistants. `llms.json` lists every command and option, and a test keeps it identical to the CLI parser and the current prompt and analysis versions. |
 
 ## Multi-model comparison
 
 | Id | Requirement |
 |----|-------------|
 | CMP-1 | `grade` with more than one model marks every essay with every model (one model at a time), writing to `--out/<model>/`. |
-| CMP-2 | It then compares the models: per essay, each model's overall, band and criterion marks, the spread, a panel mark (exact median of the models' marks, rounded half up to 4 places), a panel score on the shared reporting scale, and whether the models agree (same band and spread ≤ threshold, default 0.1000). |
+| CMP-2 | It then compares the models: per essay, each model's overall, band and criterion marks, the spread, a panel mark (the median of the models' marks; with an even number of models, the midpoint of the middle two; rounded half up to 4 places in decimal mode only), a panel score on the shared reporting scale, and whether the models agree (every model marked it, all in the same band, and spread ≤ threshold, default 0.1000). |
 | CMP-3 | Pairwise agreement for each pair of models: n, mean difference, MAE, exact band agreement, QWK (2+ essays) and per-criterion MAE. |
 | CMP-4 | The comparison is printed and saved as `comparison.csv` and `comparison.json`. `marker compare` recomputes it from existing result directories. |
 | CMP-5 | The panel score can be validated against human marks (`evaluate --results-mark-column panel_score`). |
@@ -125,11 +129,12 @@ specification records the requirements that came out of it. Requirement ids
 - `marker/`: the Python package and CLI (`models`, `check`, `rubric`, `grade`, `compare`, `show`, `evaluate`), fully type-annotated and documented.
 - `rubrics/uk-undergraduate-essay.toml`: the default UK undergraduate rubric.
 - `docs/research.md`: research on marking practice and LLM marking.
-- `assets/example-papers/`: example essays for end-to-end testing.
+- `assets/example-papers/`, `assets/example-briefs/`: example essays and briefs for end-to-end testing. `sample-size-and-study-quality.md` is original and committed; third-party essays are gitignored.
 - `skills/`: AI agent skills for operating the tool.
 - `AGENTS.md`, `AGENTS/`: guidance for AI coding agents.
 - `tests/`: offline unit tests.
 - `README.md` and `LICENSE.md` (GPL-3.0).
+- `llms.txt` and `llms.json`: descriptions for AI assistants (OUT-6), and `tools/update_llms_json.py`, which regenerates the command list in `llms.json` from the CLI.
 
 ## Out of scope (for now)
 

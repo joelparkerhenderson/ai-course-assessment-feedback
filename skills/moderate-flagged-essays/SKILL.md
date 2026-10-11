@@ -14,10 +14,13 @@ Your job is to make that review fast and well-informed, not to make the decision
    severity: possible prompt injection or integrity concerns first, then
    sample disagreement, unverified evidence, borderline marks, and word limits.
 2. For each essay, read `results/<batch>/<id>.json` and summarise:
-   - the final mark and band, and each criterion's median and `sample_marks`;
+   - the final score and band, and each criterion's median and `sample_marks`
+     (`python3 -m marker show results/<batch>/<id>.json --show explanation`
+     prints all of this, with unverified quotes marked `[NOT FOUND IN ESSAY]`);
    - what each flag means in practice:
-     - **borderline**: within 2 marks below a classification boundary.
-       Human judgement decides which side of the boundary it falls.
+     - **borderline**: within the boundary margin (default 2 percentage
+       points) below a classification boundary. Human judgement decides which
+       side of the boundary it falls.
      - **samples disagree**: the model's judgements varied, so it is less certain.
      - **evidence not found**: the model quoted text that isn't in the essay,
        so treat that criterion's justification with suspicion.
@@ -26,6 +29,11 @@ Your job is to make that review fast and well-informed, not to make the decision
      - **integrity concerns**: list them. These are for a human to
        investigate under the university's academic-integrity procedure, not
        accusations.
+     - **marks outside the chosen band (clamped)**: the model's band and mark
+       disagreed; the band was kept. Read that criterion's justification.
+     - in a multi-model run, `comparison.csv` notes where **models disagree**
+       (different bands, or a spread above `--disagreement`); treat those
+       essays like flagged ones.
    - the passages of the essay the reviewer should read.
 3. Record the human's decision in `results/<batch>/moderation.csv` with columns
    `id,machine_mark,final_mark,moderator,date,reason`. Append rows; never

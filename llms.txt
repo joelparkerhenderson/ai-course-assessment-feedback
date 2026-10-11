@@ -1,0 +1,58 @@
+# marker
+
+> marker marks student essays against an analytic, criterion-referenced rubric with local Ollama models (default gpt-oss:20b), so essays never leave the machine. It is a second marker for UK higher education: every mark comes with per-criterion justifications, verified evidence quotes, feedback, review flags and full provenance. Python 3.11+, standard library only, GPL-3.0.
+
+Key facts for an AI assistant:
+
+- Run it as `python3 -m marker <command>` (or `marker <command>` once installed). Commands: `check`, `models`, `rubric`, `grade`, `compare`, `show`, `evaluate`.
+- Marks are fractions 0.0-1.0 internally (Python float by default; exact 4-place Decimal with `--numeric decimal`). Final scores are reported 0-100 by default, or on any scale with `--score-min`, `--score-max` and `--score-places`, rounded half up. Terminal displays of 0-1 fractions are whole percents with banker's rounding (0.135 shows as 14%).
+- The model never does arithmetic: it gives a band and mark per criterion; the code takes the median across seeded samples and computes the weighted mark.
+- Reproducible: fixed seeds (seed+i), a fingerprint of every input, and model digests in provenance. GGUF builds reproduce byte for byte; MLX builds do not (Ollama 0.35.1).
+- Several models can mark the same essays and be compared, with a median "panel mark".
+- Review flags tell a human what to check: sample disagreement, borderline marks, quotes not found in the essay, word limits, prompt injection, integrity concerns.
+- Safety rails: loopback-only Ollama host by default, essay treated as untrusted data, prompts that may not fit the context window are refused (Ollama would silently truncate them), duplicate essay ids are refused.
+
+## Docs
+
+- [README](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md): full user guide: installation, every command and option, model selection, comparisons, score scales, output files, flags, calibration, reproducibility, security, library use
+- [Tutorial](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md#tutorial-marking-a-modules-essays): a complete marking round, from submissions to moderated marks
+- [Full example](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md#full-example-four-local-models): real, verified output from four models on the bundled example essay
+- [Specification](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/spec/index.md): numbered requirements; the single source of truth for behaviour
+- [Research](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/docs/research.md): marking practice and LLM-as-judge evidence behind the method
+
+## Agent guidance
+
+- [AGENTS.md](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS.md): hard rules and quick commands for AI coding agents
+- [Architecture](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/architecture.md): modules, responsibilities and data flow
+- [Conventions](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/conventions.md): Python style, numeric modes, rounding and formatting rules
+- [Testing](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/testing.md): offline test suite and fakes
+- [Reproducibility](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/reproducibility.md): fingerprints, versions, seeds
+- [Security and privacy](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/security-and-privacy.md): student-data rules
+- [Marking methodology](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/marking-methodology.md): how marks and flags are computed
+
+## Skills
+
+- [mark-essays](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/mark-essays/SKILL.md): mark essays with one or more models and report the results
+- [compare-models](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/compare-models/SKILL.md): mark with several models and interpret the comparison
+- [write-rubric](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/write-rubric/SKILL.md): turn a marking scheme into a valid rubric TOML
+- [calibrate-marker](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/calibrate-marker/SKILL.md): measure agreement with human marks (QWK, MAE)
+- [moderate-flagged-essays](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/moderate-flagged-essays/SKILL.md): review essays flagged for a human
+- [prepare-essays](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/prepare-essays/SKILL.md): convert submissions to .txt, .md or .docx
+
+## Source
+
+- [marker/cli.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/cli.py): command-line interface
+- [marker/grader.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/grader.py): sampling, validation, aggregation, flags, provenance, context-window guard
+- [marker/prompt.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/prompt.py): prompt and JSON schema
+- [marker/scale.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/scale.py): numeric modes, rounding, score scales, display percents
+- [marker/models.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/models.py): model selection, MLX policy, reasoning settings
+- [marker/compare.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/marker/compare.py): multi-model comparison and panel mark
+- [rubrics/uk-undergraduate-essay.toml](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/rubrics/uk-undergraduate-essay.toml): the default rubric
+
+## Optional
+
+- [Example essay](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/assets/example-papers/sample-size-and-study-quality.md): original example essay used in the README
+- [Example brief](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/assets/example-briefs/sample-size-and-study-quality.txt): its assignment brief
+- [llms.json](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/llms.json): the same information as structured JSON, with every command and option
+- [tools/update_llms_json.py](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/tools/update_llms_json.py): regenerates the command list in llms.json from the CLI
+- [License](https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/LICENSE.md): GPL-3.0

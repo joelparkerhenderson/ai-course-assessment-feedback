@@ -1,0 +1,660 @@
+{
+  "name": "marker",
+  "version": "0.1.0",
+  "summary": "Marks student essays against an analytic, criterion-referenced rubric with local Ollama models (default gpt-oss:20b), as a reproducible second marker with per-criterion justifications, verified evidence quotes, feedback, review flags and provenance.",
+  "license": "GPL-3.0-only",
+  "repository": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback",
+  "requirements": {
+    "python": ">=3.11",
+    "runtime_dependencies": [],
+    "server": "Ollama on loopback (default http://127.0.0.1:11434)",
+    "default_model": "gpt-oss:20b"
+  },
+  "invocation": [
+    "python3 -m marker <command> [options]",
+    "marker <command> [options]"
+  ],
+  "principles": [
+    "Security and privacy of student data first: essays never leave the machine; the Ollama host must be loopback unless --allow-remote.",
+    "Reproducibility: seeds seed+i, retries seed+1000*attempt, a fingerprint of every input, model digests and versions in provenance.",
+    "Marking validity: criterion-referenced bands, median of independent samples, the model never does arithmetic, review flags for humans."
+  ],
+  "marks": {
+    "internal": "Fractions 0.0-1.0. Python float by default; exact Decimal with 4 places with --numeric decimal.",
+    "score": "score = score_min + weighted_mark * (score_max - score_min), rounded half up to --score-places. Default 0-100 integers.",
+    "display": "Terminal displays of 0-1 fractions are whole percents rounded half to even on the exact decimal value (0.135 -> 14%).",
+    "bands": "UK classification bands from the rubric; a mark belongs to the highest band whose minimum is at or below it."
+  },
+  "versions": {
+    "prompt_version": "2.0.0",
+    "analysis_version": "7"
+  },
+  "context_window": {
+    "chars_per_token_estimate": 3,
+    "answer_reserve_tokens": 12288,
+    "default_num_ctx": 32768,
+    "behaviour": "Essays whose prompt may not fit are refused before marking; a prompt that filled the window fails; prompt+answer overflow is retried."
+  },
+  "commands": [
+    {
+      "name": "check",
+      "summary": "verify Ollama is running and the selected models are usable",
+      "arguments": [],
+      "options": [
+        {
+          "flags": [
+            "--host"
+          ],
+          "help": "Ollama URL (default http://127.0.0.1:11434)",
+          "default": "http://127.0.0.1:11434"
+        },
+        {
+          "flags": [
+            "--allow-remote"
+          ],
+          "help": "allow a non-loopback Ollama host"
+        },
+        {
+          "flags": [
+            "--model"
+          ],
+          "help": "exact Ollama model tag; repeat or comma-separate for several (e.g. gpt-oss:20b,muse-glimmer:30b-mlx)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--family"
+          ],
+          "help": "model family, loosely matched (e.g. gpt-oss, \"ChatGPT-OSS\", \"Muse Glimmer\"); repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--size"
+          ],
+          "help": "parameter size(s) to keep, e.g. 20b,120b; repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--mlx"
+          ],
+          "help": "Mac MLX builds when selecting by family/size: auto (prefer on Apple Silicon, else never), prefer, only, never, any (default auto)",
+          "choices": [
+            "auto",
+            "prefer",
+            "only",
+            "never",
+            "any"
+          ],
+          "default": "auto"
+        }
+      ]
+    },
+    {
+      "name": "models",
+      "summary": "list installed models (family, size, MLX build); * marks the selection",
+      "arguments": [],
+      "options": [
+        {
+          "flags": [
+            "--host"
+          ],
+          "help": "Ollama URL (default http://127.0.0.1:11434)",
+          "default": "http://127.0.0.1:11434"
+        },
+        {
+          "flags": [
+            "--allow-remote"
+          ],
+          "help": "allow a non-loopback Ollama host"
+        },
+        {
+          "flags": [
+            "--model"
+          ],
+          "help": "exact Ollama model tag; repeat or comma-separate for several (e.g. gpt-oss:20b,muse-glimmer:30b-mlx)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--family"
+          ],
+          "help": "model family, loosely matched (e.g. gpt-oss, \"ChatGPT-OSS\", \"Muse Glimmer\"); repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--size"
+          ],
+          "help": "parameter size(s) to keep, e.g. 20b,120b; repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--mlx"
+          ],
+          "help": "Mac MLX builds when selecting by family/size: auto (prefer on Apple Silicon, else never), prefer, only, never, any (default auto)",
+          "choices": [
+            "auto",
+            "prefer",
+            "only",
+            "never",
+            "any"
+          ],
+          "default": "auto"
+        }
+      ]
+    },
+    {
+      "name": "rubric",
+      "summary": "validate and show a rubric",
+      "arguments": [],
+      "options": [
+        {
+          "flags": [
+            "--rubric"
+          ],
+          "help": "rubric TOML file",
+          "default": "rubrics/uk-undergraduate-essay.toml"
+        },
+        {
+          "flags": [
+            "--numeric"
+          ],
+          "help": "numeric type for marks 0.0-1.0: float (default) or decimal (exact Decimal, 4 places, 0.0000-1.0000)",
+          "choices": [
+            "float",
+            "decimal"
+          ],
+          "default": "float"
+        }
+      ]
+    },
+    {
+      "name": "grade",
+      "summary": "mark essays (.txt, .md, .docx files or directories) with one or more models",
+      "arguments": [
+        {
+          "name": "essays",
+          "nargs": "+",
+          "help": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": [
+            "--host"
+          ],
+          "help": "Ollama URL (default http://127.0.0.1:11434)",
+          "default": "http://127.0.0.1:11434"
+        },
+        {
+          "flags": [
+            "--allow-remote"
+          ],
+          "help": "allow a non-loopback Ollama host"
+        },
+        {
+          "flags": [
+            "--model"
+          ],
+          "help": "exact Ollama model tag; repeat or comma-separate for several (e.g. gpt-oss:20b,muse-glimmer:30b-mlx)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--family"
+          ],
+          "help": "model family, loosely matched (e.g. gpt-oss, \"ChatGPT-OSS\", \"Muse Glimmer\"); repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--size"
+          ],
+          "help": "parameter size(s) to keep, e.g. 20b,120b; repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--mlx"
+          ],
+          "help": "Mac MLX builds when selecting by family/size: auto (prefer on Apple Silicon, else never), prefer, only, never, any (default auto)",
+          "choices": [
+            "auto",
+            "prefer",
+            "only",
+            "never",
+            "any"
+          ],
+          "default": "auto"
+        },
+        {
+          "flags": [
+            "--rubric"
+          ],
+          "help": "rubric TOML file",
+          "default": "rubrics/uk-undergraduate-essay.toml"
+        },
+        {
+          "flags": [
+            "--show"
+          ],
+          "help": "what to print: score, explanation, thinking or all; comma-separate or repeat (default score)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--numeric"
+          ],
+          "help": "numeric type for marks 0.0-1.0: float (default) or decimal (exact Decimal, 4 places, 0.0000-1.0000)",
+          "choices": [
+            "float",
+            "decimal"
+          ],
+          "default": "float"
+        },
+        {
+          "flags": [
+            "--score-min"
+          ],
+          "help": "score for 0%%, as an exact decimal (default 0)",
+          "default": "0"
+        },
+        {
+          "flags": [
+            "--score-max"
+          ],
+          "help": "score for 100%%, e.g. 100 or 1.0000 (default 100)",
+          "default": "100"
+        },
+        {
+          "flags": [
+            "--score-places"
+          ],
+          "help": "decimal places in scores, 0-6 (default: as written in --score-min/--score-max, so 1.0000 gives 4)"
+        },
+        {
+          "flags": [
+            "--brief"
+          ],
+          "help": "assignment brief / question text file"
+        },
+        {
+          "flags": [
+            "--out"
+          ],
+          "help": "output directory; one subdirectory per model when several (default results)",
+          "default": "results"
+        },
+        {
+          "flags": [
+            "--think",
+            "--reasoning"
+          ],
+          "help": "reasoning: low, medium or high (effort for gpt-oss; other thinking models just reason), on, or off (no reasoning; gpt-oss can't switch off, so it gets low). MODEL=SETTING sets one model or family, e.g. gpt-oss:120b=low (repeat or comma-separate; default high)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--samples"
+          ],
+          "help": "independent samples per essay; the median is used (default 3)",
+          "default": 3
+        },
+        {
+          "flags": [
+            "--seed"
+          ],
+          "help": "base seed; sample i uses seed+i (default 42)",
+          "default": 42
+        },
+        {
+          "flags": [
+            "--temperature"
+          ],
+          "help": "sampling temperature, 0-2 (default 0.6)",
+          "default": 0.6
+        },
+        {
+          "flags": [
+            "--top-p"
+          ],
+          "help": "nucleus sampling cut-off, above 0 up to 1 (default 1.0)",
+          "default": 1.0
+        },
+        {
+          "flags": [
+            "--top-k"
+          ],
+          "help": "sample only from the N most likely tokens (default: Ollama's)"
+        },
+        {
+          "flags": [
+            "--min-p"
+          ],
+          "help": "drop tokens below P x the top token's probability (default: Ollama's)"
+        },
+        {
+          "flags": [
+            "--repeat-penalty"
+          ],
+          "help": "penalty for repeated tokens; 1 = none (default: Ollama's)"
+        },
+        {
+          "flags": [
+            "--num-predict"
+          ],
+          "help": "most tokens per answer, reasoning included (default: no limit)"
+        },
+        {
+          "flags": [
+            "--num-ctx"
+          ],
+          "help": "context window tokens (default 32768)",
+          "default": 32768
+        },
+        {
+          "flags": [
+            "--max-retries"
+          ],
+          "help": "extra attempts after an invalid answer (default 2)",
+          "default": 2
+        },
+        {
+          "flags": [
+            "--option"
+          ],
+          "help": "any other Ollama option, e.g. num_gpu=99 or num_thread=8 (VALUE is JSON: number, true/false, or text); repeatable",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--disagreement"
+          ],
+          "help": "flag if marks spread more than this fraction, across samples or across models (default 0.1000 = 10 points)",
+          "default": "0.1000"
+        },
+        {
+          "flags": [
+            "--boundary-margin"
+          ],
+          "help": "flag a final mark this close below a band boundary (default 0.0200)",
+          "default": "0.0200"
+        },
+        {
+          "flags": [
+            "--keep-reasoning"
+          ],
+          "help": "store the model's reasoning trace (implied by --show thinking)"
+        },
+        {
+          "flags": [
+            "--force"
+          ],
+          "help": "remark even if inputs are unchanged"
+        }
+      ]
+    },
+    {
+      "name": "compare",
+      "summary": "compare result directories from different models",
+      "arguments": [
+        {
+          "name": "dirs",
+          "nargs": "+",
+          "help": "result directories, or one multi-model --out directory"
+        }
+      ],
+      "options": [
+        {
+          "flags": [
+            "--rubric"
+          ],
+          "help": "rubric TOML file",
+          "default": "rubrics/uk-undergraduate-essay.toml"
+        },
+        {
+          "flags": [
+            "--numeric"
+          ],
+          "help": "numeric type for marks 0.0-1.0: float (default) or decimal (exact Decimal, 4 places, 0.0000-1.0000)",
+          "choices": [
+            "float",
+            "decimal"
+          ],
+          "default": "float"
+        },
+        {
+          "flags": [
+            "--out"
+          ],
+          "help": "where to write comparison.csv/json (default: the single directory given, else .)"
+        },
+        {
+          "flags": [
+            "--disagreement"
+          ],
+          "help": "models disagree if marks spread more than this fraction (default 0.1000)",
+          "default": "0.1000"
+        },
+        {
+          "flags": [
+            "--json"
+          ],
+          "help": "print the full comparison as JSON"
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "summary": "print score, explanation and/or thinking from existing results",
+      "arguments": [
+        {
+          "name": "results",
+          "nargs": "+",
+          "help": "result JSON files or result directories"
+        }
+      ],
+      "options": [
+        {
+          "flags": [
+            "--show"
+          ],
+          "help": "what to print: score, explanation, thinking or all; comma-separate or repeat (default score)",
+          "repeatable": true
+        },
+        {
+          "flags": [
+            "--numeric"
+          ],
+          "help": "numeric type for marks 0.0-1.0: float (default) or decimal (exact Decimal, 4 places, 0.0000-1.0000)",
+          "choices": [
+            "float",
+            "decimal"
+          ],
+          "default": "float"
+        },
+        {
+          "flags": [
+            "--score-min"
+          ],
+          "help": "score for 0%%, as an exact decimal (default 0)"
+        },
+        {
+          "flags": [
+            "--score-max"
+          ],
+          "help": "score for 100%%, e.g. 100 or 1.0000 (default 100)"
+        },
+        {
+          "flags": [
+            "--score-places"
+          ],
+          "help": "decimal places in scores, 0-6 (default: as written in --score-min/--score-max, so 1.0000 gives 4)"
+        }
+      ]
+    },
+    {
+      "name": "evaluate",
+      "summary": "compare machine marks against human marks",
+      "arguments": [],
+      "options": [
+        {
+          "flags": [
+            "--results"
+          ],
+          "help": "summary.csv or comparison.csv from marker",
+          "default": "results/summary.csv"
+        },
+        {
+          "flags": [
+            "--results-mark-column"
+          ],
+          "help": "score column in --results (default score; panel_score for comparison.csv; mark or panel_mark with --score-min 0 --score-max 1.0000)",
+          "default": "score"
+        },
+        {
+          "flags": [
+            "--human"
+          ],
+          "help": "CSV of human marks"
+        },
+        {
+          "flags": [
+            "--id-column"
+          ],
+          "help": "",
+          "default": "id"
+        },
+        {
+          "flags": [
+            "--mark-column"
+          ],
+          "help": "",
+          "default": "mark"
+        },
+        {
+          "flags": [
+            "--json"
+          ],
+          "help": "print the full report as JSON"
+        },
+        {
+          "flags": [
+            "--rubric"
+          ],
+          "help": "rubric TOML file",
+          "default": "rubrics/uk-undergraduate-essay.toml"
+        },
+        {
+          "flags": [
+            "--numeric"
+          ],
+          "help": "numeric type for marks 0.0-1.0: float (default) or decimal (exact Decimal, 4 places, 0.0000-1.0000)",
+          "choices": [
+            "float",
+            "decimal"
+          ],
+          "default": "float"
+        },
+        {
+          "flags": [
+            "--score-min"
+          ],
+          "help": "score for 0%%, as an exact decimal (default 0)",
+          "default": "0"
+        },
+        {
+          "flags": [
+            "--score-max"
+          ],
+          "help": "score for 100%%, e.g. 100 or 1.0000 (default 100)",
+          "default": "100"
+        },
+        {
+          "flags": [
+            "--score-places"
+          ],
+          "help": "decimal places in scores, 0-6 (default: as written in --score-min/--score-max, so 1.0000 gives 4)"
+        }
+      ]
+    }
+  ],
+  "outputs": {
+    "<out>/<essay-id>.json": "Full result: mark, weighted_mark, score, band, needs_review, flags, criteria, feedback, integrity_concerns, samples, provenance.",
+    "<out>/summary.csv": "One row per essay: id, score, score_min, score_max, mark, band, needs_review, one column per criterion, word_count, flags, model, model_digest.",
+    "<out>/audit.jsonl": "Append-only log, one line per marking event (marked or reanalysed).",
+    "<out>/comparison.csv, comparison.json": "With several models: per-model marks, scores and bands, spread, panel mark and score, agreement, notes; pairwise statistics in the JSON.",
+    "multi-model layout": "With several models, each model's results go to <out>/<model-slug>/."
+  },
+  "review_flags": [
+    "samples disagree on <criterion>: marks [<percents>]",
+    "<criterion>: <n> evidence quote(s) not found in the essay",
+    "borderline: <mark%> is within <margin%> below the <boundary%> boundary",
+    "word count <n> is below the minimum <min>",
+    "word count <n> exceeds the limit <max>",
+    "possible prompt injection in essay: <matches>",
+    "model raised integrity concerns",
+    "model gave marks outside its chosen band (clamped)"
+  ],
+  "exit_codes": {
+    "0": "success",
+    "1": "some essays failed",
+    "2": "usage or configuration error"
+  },
+  "docs": {
+    "readme": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md",
+    "spec": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/spec/index.md",
+    "research": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/docs/research.md",
+    "agents": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS.md",
+    "architecture": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/architecture.md",
+    "conventions": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/conventions.md",
+    "testing": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/testing.md",
+    "reproducibility": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/reproducibility.md",
+    "security_and_privacy": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/security-and-privacy.md",
+    "marking_methodology": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/AGENTS/marking-methodology.md",
+    "llms_txt": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/llms.txt",
+    "tutorial": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md#tutorial-marking-a-modules-essays",
+    "full_example": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/README.md#full-example-four-local-models"
+  },
+  "skills": {
+    "mark-essays": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/mark-essays/SKILL.md",
+    "compare-models": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/compare-models/SKILL.md",
+    "write-rubric": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/write-rubric/SKILL.md",
+    "calibrate-marker": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/calibrate-marker/SKILL.md",
+    "moderate-flagged-essays": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/moderate-flagged-essays/SKILL.md",
+    "prepare-essays": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback/blob/main/skills/prepare-essays/SKILL.md"
+  },
+  "examples": [
+    {
+      "description": "Mark the bundled example essay with its brief",
+      "command": "python3 -m marker grade assets/example-papers/sample-size-and-study-quality.md --brief assets/example-briefs/sample-size-and-study-quality.txt --out results/example"
+    },
+    {
+      "description": "Compare four local models with 2 samples and high reasoning",
+      "command": "python3 -m marker grade assets/example-papers/sample-size-and-study-quality.md --brief assets/example-briefs/sample-size-and-study-quality.txt --model mistral-small3.2,gpt-oss:20b,qwen3.8:27b,muse-glimmer:30b --samples 2 --think high --out results/readme-example"
+    },
+    {
+      "description": "Report scores as a probability with 4 decimal places",
+      "command": "python3 -m marker grade essays/ --score-min 0.0000 --score-max 1.0000"
+    },
+    {
+      "description": "Per-model reasoning settings",
+      "command": "python3 -m marker grade essays/ --model gpt-oss:20b,gpt-oss:120b --think high,gpt-oss:120b=low"
+    },
+    {
+      "description": "Print explanations from saved results without calling a model",
+      "command": "python3 -m marker show results/example --show explanation"
+    },
+    {
+      "description": "Measure agreement with human marks",
+      "command": "python3 -m marker evaluate --results results/example/summary.csv --human human-marks.csv"
+    }
+  ],
+  "maintenance": {
+    "regenerate_commands": "python3 tools/update_llms_json.py",
+    "check": "python3 -m unittest tests.test_llms"
+  }
+}

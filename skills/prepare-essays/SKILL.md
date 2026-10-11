@@ -25,7 +25,9 @@ The marker reads `.txt`, `.md` and `.docx`. Everything else must be converted.
    The marker strips `<!-- ... -->` comments before marking, so the model never
    sees them.
 5. **Name the file** in kebab-case. The name becomes the essay id, e.g.
-   `assets/example-papers/<slug>.md`.
+   `assets/example-papers/<slug>.md`, so it must be unique within a batch
+   (`grade` refuses two files with the same name and different extensions).
+   For real submissions use anonymised ids (e.g. `cand-0412`), not names.
 6. **Verify.** Use `grep` to check that no site boilerplate is left (brand
    names, "order now", prices). Check that the word count is plausible
    (`python3 -c "from marker.essay import load_essay as l; print(l('<file>').word_count)"`).
@@ -33,6 +35,8 @@ The marker reads `.txt`, `.md` and `.docx`. Everything else must be converted.
 ## Rules
 
 - Respect copyright: example papers from third-party sites are for local
-  testing only. Don't republish them.
+  testing only. Don't republish them: add them to `.gitignore` and list their
+  source in `assets/example-papers/README.md`. The committed example essay
+  (`sample-size-and-study-quality.md`) is original; quote from that one in docs.
 - Real student essays are personal data. Keep them out of git, out of chat,
   and off remote services.

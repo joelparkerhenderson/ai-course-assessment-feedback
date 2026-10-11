@@ -73,6 +73,7 @@ class OllamaClient:
     """
 
     def __init__(self, host: str = DEFAULT_HOST, *, allow_remote: bool = False, timeout: float = 1800) -> None:
+        """Validate the host (http/https, loopback unless ``allow_remote``) before any request is made."""
         if urlparse(host).scheme not in ("http", "https"):
             raise OllamaError(f"invalid Ollama host {host!r}")
         if not allow_remote and not is_loopback(host):

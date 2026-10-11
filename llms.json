@@ -1,7 +1,7 @@
 {
   "name": "marker",
   "version": "0.1.0",
-  "summary": "Marks student essays against an analytic, criterion-referenced rubric with local Ollama models (default gpt-oss:20b), as a reproducible second marker with per-criterion justifications, verified evidence quotes, feedback, review flags and provenance.",
+  "summary": "A program for marking student essays using local AI: one or several local Ollama models (default gpt-oss:20b) mark against an analytic, criterion-referenced rubric, as a reproducible second marker with per-criterion justifications, verified evidence quotes, feedback, review flags and provenance.",
   "license": "GPL-3.0-only",
   "repository": "https://github.com/joelparkerhenderson/ai-course-assessment-feedback",
   "requirements": {

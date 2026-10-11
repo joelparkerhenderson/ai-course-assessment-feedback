@@ -1,6 +1,6 @@
 # marker
 
-> marker marks student essays against an analytic, criterion-referenced rubric with local Ollama models (default gpt-oss:20b), so essays never leave the machine. It is a second marker for UK higher education: every mark comes with per-criterion justifications, verified evidence quotes, feedback, review flags and full provenance. Python 3.11+, standard library only, GPL-3.0.
+> marker is a program for marking student essays using local AI and local models: one or several Ollama models (default gpt-oss:20b) mark against an analytic, criterion-referenced rubric, so essays never leave the machine. It is a second marker for UK higher education: every mark comes with per-criterion justifications, verified evidence quotes, feedback, review flags and full provenance. Python 3.11+, standard library only, GPL-3.0.
 
 Key facts for an AI assistant:
 
